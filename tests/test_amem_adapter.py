@@ -13,9 +13,24 @@ import types
 import pytest
 
 
+class _FakeMessage:
+    def __init__(self, content):
+        self.content = content
+
+
+class _FakeChoice:
+    def __init__(self, content):
+        self.message = _FakeMessage(content)
+
+
+class _FakeLiteLLMResponse:
+    def __init__(self, content):
+        self.choices = [_FakeChoice(content)]
+
+
 @pytest.fixture
 def fake_agentic_memory(monkeypatch):
-    calls = {}
+    calls = {"llm_responses": ["{}"]}
 
     class FakeAgenticMemorySystem:
         def __init__(self, model_name="all-MiniLM-L6-v2", llm_backend="openai", llm_model="gpt-4o-mini", evo_threshold=100, api_key=None):
@@ -33,9 +48,12 @@ def fake_agentic_memory(monkeypatch):
     fake_package = types.ModuleType("agentic_memory")
     fake_package.memory_system = fake_memory_system_module
 
+    fake_litellm_module = types.ModuleType("litellm")
+    fake_litellm_module.completion = lambda **kwargs: _FakeLiteLLMResponse(calls["llm_responses"][0])
+
     monkeypatch.setitem(sys.modules, "agentic_memory", fake_package)
     monkeypatch.setitem(sys.modules, "agentic_memory.memory_system", fake_memory_system_module)
-    monkeypatch.setitem(sys.modules, "litellm", types.ModuleType("litellm"))
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm_module)
 
     for mod_name in ["amem_gepa.amem_adapter", "amem_gepa.llm.litellm_controller"]:
         sys.modules.pop(mod_name, None)
@@ -57,3 +75,37 @@ def test_construction_does_not_require_openai_api_key(fake_agentic_memory, monke
     )
 
     assert fake_agentic_memory["kwargs"]["api_key"] is not None
+
+
+def test_analyze_content_fills_in_missing_keys(fake_agentic_memory):
+    """Real crash seen on a live Llama 3.2:1b run: the model returned JSON
+    that parsed successfully but was missing "tags" entirely (likely
+    truncated output that happened to close its braces early), and
+    add_note()'s analysis["tags"] direct indexing raised KeyError."""
+    from amem_gepa.amem_adapter import PromptInjectableMemorySystem
+
+    fake_agentic_memory["llm_responses"][0] = '{"keywords": ["a", "b"]}'
+    system = PromptInjectableMemorySystem(
+        note_construction_prompt="construct {content}",
+        evolution_prompt="evolve",
+        llm_model="ollama/llama3.2:1b",
+    )
+
+    result = system.analyze_content("some memory content")
+
+    assert result == {"keywords": ["a", "b"], "context": "General", "tags": []}
+
+
+def test_analyze_content_falls_back_on_unparseable_json(fake_agentic_memory):
+    from amem_gepa.amem_adapter import PromptInjectableMemorySystem
+
+    fake_agentic_memory["llm_responses"][0] = "not json at all, just rambling"
+    system = PromptInjectableMemorySystem(
+        note_construction_prompt="construct {content}",
+        evolution_prompt="evolve",
+        llm_model="ollama/llama3.2:1b",
+    )
+
+    result = system.analyze_content("some memory content")
+
+    assert result == {"keywords": [], "context": "General", "tags": []}

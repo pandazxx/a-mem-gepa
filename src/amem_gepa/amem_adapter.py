@@ -88,10 +88,20 @@ class PromptInjectableMemorySystem(AgenticMemorySystem):
             response = self.llm_controller.llm.get_completion(
                 prompt, response_format=_NOTE_ANALYSIS_SCHEMA
             )
-            return parse_json_response(response)
+            parsed = parse_json_response(response)
         except Exception as exc:  # matches upstream's own broad catch + fallback
             print(f"Error analyzing content: {exc}")
-            return {"keywords": [], "context": "General", "tags": []}
+            parsed = {}
+        # Smaller/weaker models (docs/decisions/0005) sometimes return JSON
+        # that parses fine but is missing a key entirely -- e.g. a truncated
+        # response that happens to close its braces early. A successful
+        # parse isn't the same as a complete one; fill in the same defaults
+        # upstream uses on an outright parse failure, per key, not just here.
+        return {
+            "keywords": parsed.get("keywords") or [],
+            "context": parsed.get("context") or "General",
+            "tags": parsed.get("tags") or [],
+        }
 
     def add_note(self, content: str, time: str = None, **kwargs) -> str:
         if "keywords" not in kwargs:
