@@ -1,0 +1,24 @@
+# Default run config. Copy + override per experiment rather than editing
+# this in place once experiments start (see docs/experiments/README.md).
+
+dataset:
+  name: locomo
+  split_manifest: configs/locomo_split.json
+
+models:
+  # A-MEM's own LLM backend (the system under test) -- LiteLLM model-id string.
+  amem_llm_model: ${AMEM_LLM_MODEL}
+  amem_embedding_model: ${AMEM_EMBEDDING_MODEL}
+  # GEPA optimization roles (docs/decisions/0003).
+  gepa_task_lm: ${GEPA_TASK_LM}
+  gepa_reflection_lm: ${GEPA_REFLECTION_LM}
+
+gepa:
+  max_metric_calls: 150
+  seed_candidate:
+    note_construction: src/amem_gepa/prompts/baseline/note_construction.txt
+    evolution: src/amem_gepa/prompts/baseline/evolution.txt
+
+evaluation:
+  # Bootstrap CI resamples for the headline test-set metric (docs/decisions/0004).
+  bootstrap_resamples: 10000
