@@ -68,6 +68,15 @@ class PromptInjectableMemorySystem(AgenticMemorySystem):
         llm_api_base: Optional[str] = None,
         **kwargs,
     ):
+        # AgenticMemorySystem.__init__ unconditionally builds a real
+        # LLMController before we get a chance to override it below, and
+        # defaults to backend="openai" -- which raises ValueError if
+        # OPENAI_API_KEY isn't set, even though that controller is about to
+        # be discarded. Feed it a throwaway key so that construction doesn't
+        # crash; the OpenAI SDK client it builds just stores the string, it
+        # doesn't validate it until an actual request is made, and we never
+        # make one through it.
+        kwargs.setdefault("api_key", "unused-discarded-immediately-below")
         super().__init__(**kwargs)
         self.llm_controller = LiteLLMController(model=llm_model, api_base=llm_api_base)
         self._note_construction_prompt = note_construction_prompt
