@@ -9,6 +9,8 @@ models:
   # A-MEM's own LLM backend (the system under test) -- LiteLLM model-id string.
   amem_llm_model: ${AMEM_LLM_MODEL}
   amem_embedding_model: ${AMEM_EMBEDDING_MODEL}
+  # Only meaningful for ollama-routed models; harmless to leave set otherwise.
+  amem_llm_api_base: ${OLLAMA_API_BASE}
   # GEPA optimization roles (docs/decisions/0003).
   gepa_task_lm: ${GEPA_TASK_LM}
   gepa_reflection_lm: ${GEPA_REFLECTION_LM}
@@ -20,5 +22,10 @@ gepa:
     evolution: src/amem_gepa/prompts/baseline/evolution.txt
 
 evaluation:
+  # Which split run_baseline.py/run_eval.py score by default (docs/decisions/0004).
+  split: test
+  # Top-k memories retrieved per question (search_agentic, docs/decisions/0006).
+  retrieval_k: 10
+  qa_prompt: src/amem_gepa/prompts/qa_answer.txt
   # Bootstrap CI resamples for the headline test-set metric (docs/decisions/0004).
   bootstrap_resamples: 10000

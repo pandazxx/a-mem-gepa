@@ -62,6 +62,7 @@ class LoCoMoInstance:
     question: str
     gold_answer: Optional[str]
     category: int
+    adversarial_answer: Optional[str] = None
 
     @property
     def category_label(self) -> str:
@@ -216,6 +217,7 @@ def load_split(
                     question=qa["question"],
                     gold_answer=qa.get("answer"),
                     category=qa["category"],
+                    adversarial_answer=qa.get("adversarial_answer"),
                 )
             )
     return instances

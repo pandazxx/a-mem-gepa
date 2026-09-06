@@ -1,0 +1,16 @@
+You are answering a question about a long conversation between two people,
+using only the memory notes retrieved below. Each note was extracted from
+one moment in the conversation and may include a timestamp, a short context
+summary, and keywords.
+
+Retrieved memories:
+{retrieved_memories}
+
+Question: {question}
+
+Answer using only information from the retrieved memories above. If the
+memories don't contain enough information to answer confidently, say so
+explicitly rather than guessing. Give a short, direct answer -- a phrase or
+sentence, not an essay.
+
+Answer:
