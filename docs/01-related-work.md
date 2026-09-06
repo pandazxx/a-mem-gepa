@@ -51,10 +51,27 @@ straightforward.
 
 ## LoCoMo benchmark
 
-- 10 curated multi-session conversations (avg. ~588 turns / ~35 sessions each),
-  drawn from a larger 50-conversation pool.
-- ~7,500 human-authored QA pairs across five categories: single-hop,
-  multi-hop, temporal, open-domain, adversarial (unanswerable-question refusal).
+- From Maharana et al., "Evaluating Very Long-Term Conversational Memory of
+  LLM Agents" (ACL 2024). Source: https://github.com/snap-research/locomo
+  (`data/locomo10.json`), released for non-commercial research use (CC
+  BY-NC 4.0 per the project page). Fetched at runtime into a gitignored
+  `data/` dir, not committed — only the split manifest (conversation IDs) is
+  (see [decisions/0004](decisions/0004-train-val-test-split.md)).
+- **Verified against the actual released file** (not just secondary
+  summaries): 10 conversations (`sample_id`s like `conv-26`), 19-32 sessions
+  each, **1,986 QA pairs total** (105-260 per conversation, avg. ~199). An
+  earlier draft of this doc cited ~7,500 QA pairs — that figure is for the
+  *original* 50-conversation pool before the released 10-conversation subset
+  was curated; corrected here.
+- Five QA categories, via the integer `category` field, with real counts
+  across all 1,986 pairs:
+  - 1 = single-hop — 282
+  - 2 = temporal reasoning — 321
+  - 3 = multi-hop reasoning — 96 (by far the scarcest — ~9.6/conversation on
+    average, thin for per-category reporting on a 3-conversation test split)
+  - 4 = open-domain — 841 (the largest category by a wide margin)
+  - 5 = adversarial (unanswerable; `answer` is `null`, the "trap" answer is
+    in `adversarial_answer`) — 446
 - Used in the original A-MEM paper as an evaluation benchmark, which makes it
   the natural default for a like-for-like baseline comparison
   (see [decisions/0001](decisions/0001-base-repo-and-benchmark.md)).

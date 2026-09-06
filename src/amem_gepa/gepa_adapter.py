@@ -29,18 +29,7 @@ from typing import Any, Mapping, Sequence
 from gepa.core.adapter import EvaluationBatch
 
 from amem_gepa.amem_adapter import PromptInjectableMemorySystem
-
-
-@dataclass
-class LoCoMoInstance:
-    """One (conversation, question) pair. `conversation_id` must map to an
-    entry in the split manifest (configs/locomo_split.json, docs/decisions/0004)."""
-
-    conversation_id: str
-    turns: list[dict]
-    question: str
-    gold_answer: str
-    category: str
+from amem_gepa.datasets.locomo import LoCoMoInstance
 
 
 @dataclass

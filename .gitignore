@@ -14,5 +14,8 @@ __pycache__/
 results/
 *.chroma/
 
+# downloaded datasets (fetched at runtime, see src/amem_gepa/datasets/)
+data/
+
 # OS
 .DS_Store
