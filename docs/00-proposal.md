@@ -49,3 +49,24 @@ adversarial) rather than uniformly across all categories.
   LongMemEval is an explicit follow-up once the pipeline is validated.
 - Baseline: A-MEM's original paper prompts, unmodified
   (see [decisions/0002](decisions/0002-optimization-targets.md)).
+
+## Milestones
+
+1. **Dataset** — fetch LoCoMo, implement `datasets/locomo.py`, generate and
+   commit the split manifest (see [decisions/0004](decisions/0004-train-val-test-split.md)).
+2. **Baseline + reproduction sanity check** — implement `metrics.py`
+   (the paper reports ROUGE-L on LoCoMo, not plain accuracy, so match that),
+   reproduce the paper's numbers through our own harness on `Llama 3.2:1b`
+   (see [decisions/0005](decisions/0005-reproduction-model.md)) as a
+   correctness check before trusting the harness for anything else, then run
+   the actual A-MEM-original-prompts baseline on the test split.
+3. **Decide the GEPA trainset composition** — how `AMemGEPAAdapter.evaluate()`
+   samples from the 5 train conversations per rollout batch. Deferred; not
+   yet an ADR, revisit before starting milestone 4.
+4. **GEPA adapter + optimization run** — fill in `gepa_adapter.py`, run a
+   confirmed-budget GEPA optimization (see CLAUDE.md's "Cost awareness").
+5. **Comparative analysis** — baseline vs. GEPA-optimized on the held-out
+   test split, per-category deltas, cost accounting, checked against the
+   success criteria above.
+6. **Stretch** — LongMemEval generalization check; rotating-split robustness
+   check (see [decisions/0004](decisions/0004-train-val-test-split.md)).
