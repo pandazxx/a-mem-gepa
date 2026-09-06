@@ -39,3 +39,4 @@ just --list           # see available commands
 - `configs/` — run configs + the committed LoCoMo split manifest
 - `scripts/` — CLI entry points, run via `just`
 - `docs/` — proposal, related work, decisions, per-experiment write-ups
+
