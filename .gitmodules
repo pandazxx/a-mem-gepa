@@ -1,0 +1,3 @@
+[submodule "external/a-mem"]
+	path = external/a-mem
+	url = https://github.com/agiresearch/A-mem.git
