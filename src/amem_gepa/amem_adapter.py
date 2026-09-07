@@ -22,9 +22,16 @@ from __future__ import annotations
 
 from typing import Optional
 
-from agentic_memory.memory_system import AgenticMemorySystem
+from agentic_memory.memory_system import AgenticMemorySystem, MemoryNote
 
 from amem_gepa.llm.litellm_controller import LiteLLMController, parse_json_response
+
+# Same fields add_note() writes into ChromaDB metadata (memory_system.py) --
+# kept in sync manually, same reasoning as _NOTE_ANALYSIS_SCHEMA below.
+_NOTE_FIELDS = [
+    "id", "content", "keywords", "links", "retrieval_count", "timestamp",
+    "last_accessed", "context", "evolution_history", "category", "tags",
+]
 
 # Same response schema as upstream AgenticMemorySystem.analyze_content, kept
 # in sync manually -- see docs/decisions/0001 on why we don't subclass instead.
@@ -110,3 +117,22 @@ class PromptInjectableMemorySystem(AgenticMemorySystem):
             kwargs.setdefault("context", analysis["context"])
             kwargs.setdefault("tags", analysis["tags"])
         return super().add_note(content, time=time, **kwargs)
+
+    def snapshot_notes(self) -> list[dict]:
+        """JSON-serializable dump of every note built so far, for
+        checkpointing (checkpoint.py) -- a single conversation replay can
+        run for hours against a slow local model (docs/experiments), so
+        resuming needs to reload this state without re-calling the LLM."""
+        return [{field: getattr(note, field) for field in _NOTE_FIELDS} for note in self.memories.values()]
+
+    def restore_notes(self, notes: list[dict]) -> None:
+        """Inverse of snapshot_notes(): repopulates self.memories and the
+        ChromaDB retriever directly, bypassing add_note()/analyze_content()/
+        process_memory() entirely -- no LLM calls, since this data was
+        already produced by them in a prior (interrupted) run. Embeddings
+        are recomputed locally by ChromaDB on insert, which is cheap."""
+        for fields in notes:
+            note = MemoryNote(**fields)
+            self.memories[note.id] = note
+            metadata = {field: getattr(note, field) for field in _NOTE_FIELDS}
+            self.retriever.add_document(note.content, metadata, note.id)

@@ -7,10 +7,13 @@ that controller in favor of LiteLLMController. Stubs out `agentic_memory`
 suite) with a fake that reproduces just that crash behavior.
 """
 
+import itertools
 import sys
 import types
 
 import pytest
+
+_id_counter = itertools.count()
 
 
 class _FakeMessage:
@@ -28,6 +31,42 @@ class _FakeLiteLLMResponse:
         self.choices = [_FakeChoice(content)]
 
 
+class _FakeRetriever:
+    def __init__(self):
+        self.documents = {}
+
+    def add_document(self, document, metadata, doc_id):
+        self.documents[doc_id] = (document, metadata)
+
+
+class _FakeMemoryNote:
+    def __init__(
+        self,
+        content,
+        id=None,
+        keywords=None,
+        links=None,
+        retrieval_count=None,
+        timestamp=None,
+        last_accessed=None,
+        context=None,
+        evolution_history=None,
+        category=None,
+        tags=None,
+    ):
+        self.content = content
+        self.id = id or f"generated-id-{next(_id_counter)}"
+        self.keywords = keywords or []
+        self.links = links or []
+        self.retrieval_count = retrieval_count or 0
+        self.timestamp = timestamp or "t"
+        self.last_accessed = last_accessed or "t"
+        self.context = context or "General"
+        self.evolution_history = evolution_history or []
+        self.category = category or "Uncategorized"
+        self.tags = tags or []
+
+
 @pytest.fixture
 def fake_agentic_memory(monkeypatch):
     calls = {"llm_responses": ["{}"]}
@@ -42,9 +81,18 @@ def fake_agentic_memory(monkeypatch):
             }
             if llm_backend == "openai" and api_key is None:
                 raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY environment variable.")
+            self.memories = {}
+            self.retriever = _FakeRetriever()
+
+        def add_note(self, content, time=None, **kwargs):
+            note = _FakeMemoryNote(content=content, timestamp=time, **kwargs)
+            self.memories[note.id] = note
+            self.retriever.add_document(note.content, {}, note.id)
+            return note.id
 
     fake_memory_system_module = types.ModuleType("agentic_memory.memory_system")
     fake_memory_system_module.AgenticMemorySystem = FakeAgenticMemorySystem
+    fake_memory_system_module.MemoryNote = _FakeMemoryNote
     fake_package = types.ModuleType("agentic_memory")
     fake_package.memory_system = fake_memory_system_module
 
@@ -109,3 +157,35 @@ def test_analyze_content_falls_back_on_unparseable_json(fake_agentic_memory):
     result = system.analyze_content("some memory content")
 
     assert result == {"keywords": [], "context": "General", "tags": []}
+
+
+def test_snapshot_and_restore_roundtrip_without_llm_calls(fake_agentic_memory):
+    """restore_notes() must fully reconstruct memories + retriever state
+    from a snapshot, with zero calls to the (expensive, slow) LLM."""
+    from amem_gepa.amem_adapter import PromptInjectableMemorySystem
+
+    fake_agentic_memory["llm_responses"][0] = '{"keywords": ["hiking"], "context": "hobbies", "tags": ["x"]}'
+    source = PromptInjectableMemorySystem(
+        note_construction_prompt="construct {content}",
+        evolution_prompt="evolve",
+        llm_model="ollama/llama3.2:1b",
+    )
+    source.add_note("Alice: I love hiking.", time="t1")
+    snapshot = source.snapshot_notes()
+    assert len(snapshot) == 1
+
+    # A fresh system, with the LLM response now poisoned so any real call
+    # would produce different/wrong data -- restore must not touch it.
+    fake_agentic_memory["llm_responses"][0] = '{"keywords": ["WRONG"], "context": "WRONG", "tags": ["WRONG"]}'
+    restored = PromptInjectableMemorySystem(
+        note_construction_prompt="construct {content}",
+        evolution_prompt="evolve",
+        llm_model="ollama/llama3.2:1b",
+    )
+    restored.restore_notes(snapshot)
+
+    assert len(restored.memories) == 1
+    restored_note = next(iter(restored.memories.values()))
+    assert restored_note.keywords == ["hiking"]
+    assert restored_note.context == "hobbies"
+    assert len(restored.retriever.documents) == 1

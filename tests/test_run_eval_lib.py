@@ -54,6 +54,8 @@ evaluation:
     assert summaries["aggregate"].mean == 1.0
     assert captured["kwargs"]["llm_model"] == "fake-model"
     assert captured["kwargs"]["k"] == 5
+    assert captured["kwargs"]["run_label"] == "unit-test-run"
+    assert captured["kwargs"]["split"] == "test"
 
     out_path = tmp_path / "results" / "unit-test-run" / "test.json"
     assert out_path.exists()

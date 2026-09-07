@@ -32,7 +32,8 @@ def run_and_report(
 
     print(
         f"[{run_label}] evaluating {len(instances)} QA pairs from split={split!r} "
-        f"using model={config['models']['amem_llm_model']!r}"
+        f"using model={config['models']['amem_llm_model']!r} (resumable -- rerun the same "
+        f"command after an interruption to continue instead of restarting)"
     )
 
     result = evaluate_candidate(
@@ -45,6 +46,8 @@ def run_and_report(
         embedding_model=config["models"]["amem_embedding_model"],
         k=config["evaluation"]["retrieval_k"],
         n_bootstrap_resamples=config["evaluation"]["bootstrap_resamples"],
+        run_label=run_label,
+        split=split,
     )
 
     print(f"\n{run_label} results (split={split}):")
