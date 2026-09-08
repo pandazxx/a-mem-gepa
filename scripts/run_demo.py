@@ -61,10 +61,18 @@ def main(
     )
 
     for r in result.instance_results:
-        expected = r.adversarial_answer if r.category == 5 else r.gold_answer
+        if r.category == 5:
+            # Correct behavior here is to NOT match this -- it's a trap
+            # answer LoCoMo grounds in something real Jon/Gina/etc. said
+            # about a *different* topic, not a gold answer to reproduce.
+            label = "trap (correct = does NOT match)"
+            reference = r.adversarial_answer
+        else:
+            label = "expected"
+            reference = r.gold_answer
         print(
             f"\nQ ({CATEGORY_LABELS[r.category]}): {r.question}\n"
-            f"  expected: {expected!r}\n"
+            f"  {label}: {reference!r}\n"
             f"  predicted: {r.prediction!r}\n"
             f"  score: {r.score:.2f}"
         )
