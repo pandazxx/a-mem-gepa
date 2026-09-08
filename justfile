@@ -7,6 +7,11 @@ default:
 setup:
     uv sync
 
+# Fast end-to-end sanity demo: one truncated conversation, a few questions
+# (docs/decisions/0008) -- run this before `just baseline`, not instead of it
+demo config="configs/base.yaml" max_turns="15" max_questions="5":
+    uv run python scripts/run_demo.py --config {{config}} --max-turns {{max_turns}} --max-questions {{max_questions}}
+
 # Evaluate A-MEM with the original, unmodified paper prompts
 baseline config="configs/base.yaml":
     uv run python scripts/run_baseline.py --config {{config}}

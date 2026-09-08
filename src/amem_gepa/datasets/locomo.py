@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import itertools
 import json
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -221,3 +222,63 @@ def load_split(
                 )
             )
     return instances
+
+
+def load_demo_sample(
+    conversation_id: Optional[str] = None,
+    max_turns: int = 15,
+    max_questions: int = 5,
+    manifest_path: Path = SPLIT_MANIFEST_PATH,
+    raw_path: Path = RAW_PATH,
+) -> list[LoCoMoInstance]:
+    """A tiny, fast end-to-end sanity sample (docs/decisions/0008): one
+    conversation truncated to its first `max_turns` turns, plus up to
+    `max_questions` QA pairs whose evidence falls entirely within that
+    truncated window -- so they're actually answerable from what got
+    replayed, not testing against context that was cut off. Not a
+    statistically meaningful sample; verifies replay -> retrieve -> answer
+    -> score runs correctly and quickly, nothing more.
+
+    Defaults to the first train-split conversation (not val/test), so
+    eyeballing demo output during development doesn't mean looking at data
+    the real reproduction/GEPA runs are held out against.
+    """
+    if conversation_id is None:
+        conversation_id = load_split_manifest(manifest_path)["train"][0]
+
+    conv = next(c for c in load_raw_conversations(raw_path) if c["sample_id"] == conversation_id)
+    all_turns = _turns_for_conversation(conv["conversation"])
+    truncated_turns = all_turns[:max_turns]
+    valid_dia_ids = {t.dia_id for t in truncated_turns}
+
+    by_category: dict[int, list[dict]] = defaultdict(list)
+    for qa in conv["qa"]:
+        evidence = qa.get("evidence") or []
+        if not set(evidence).issubset(valid_dia_ids):
+            continue  # depends on a turn that got truncated away
+        by_category[qa["category"]].append(qa)
+
+    # Round-robin across categories so a 5-question demo has a shot at
+    # showing one of each, rather than whatever happened to come first in
+    # the file (docs/decisions/0008) -- more useful for a human eyeballing
+    # the output than a same-category run of 5.
+    selected: list[dict] = []
+    category_queues = {cat: list(qas) for cat, qas in by_category.items()}
+    while len(selected) < max_questions and any(category_queues.values()):
+        for cat in sorted(category_queues):
+            if len(selected) >= max_questions:
+                break
+            if category_queues[cat]:
+                selected.append(category_queues[cat].pop(0))
+
+    return [
+        LoCoMoInstance(
+            conversation_id=conv["sample_id"],
+            turns=truncated_turns,
+            question=qa["question"],
+            gold_answer=qa.get("answer"),
+            category=qa["category"],
+            adversarial_answer=qa.get("adversarial_answer"),
+        )
+        for qa in selected
+    ]
