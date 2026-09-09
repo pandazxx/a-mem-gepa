@@ -20,6 +20,7 @@ rather than trusting the paper's description of the code:
 
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 from agentic_memory.memory_system import AgenticMemorySystem, MemoryNote
@@ -27,36 +28,71 @@ from agentic_memory.memory_system import AgenticMemorySystem, MemoryNote
 from amem_gepa.llm.litellm_controller import LiteLLMController, parse_json_response
 
 
-class _EvolutionTraceBackend:
-    """Wraps a LiteLLMBackend so the evolution-step LLM call prints its
-    parsed decision (docs/decisions/0011) -- only installed for the
-    duration of one super().add_note() call, and only when trace=True.
-    Note-construction tracing doesn't need this: analyze_content() already
-    parses its own response and can print directly."""
+class _EvolutionGuardBackend:
+    """Wraps a LiteLLMBackend for the duration of one super().add_note()
+    call (docs/decisions/0012) to:
 
-    def __init__(self, inner):
+    1. Validate the evolution decision before upstream applies it. Found by
+       tracing a real Llama 3.2:1b run: process_memory() has no guard
+       against a fabricated response -- it took a "strengthen" decision
+       whose suggested_connections were placeholder-shaped strings
+       (`memory_index_0`, ...) that matched no real memory, and
+       tags_to_update that echoed schema field names (`keywords_0`,
+       `memory_tags_0`, ...) rather than real tag words, and applied both
+       verbatim: note.links.extend(fake_ids) and note.tags = fake_tags,
+       silently overwriting the note's real tags with garbage. If none of
+       `suggested_connections` match a real memory id, the whole decision
+       is untrusted and forced to should_evolve=False before upstream ever
+       sees it. Always on -- this is a correctness fix, not a debugging
+       aid, so it applies to `just baseline` too.
+    2. Optionally print the (possibly corrected) decision (docs/decisions/0011).
+
+    Note-construction doesn't need this: analyze_content() already parses
+    its own response and can print/validate directly.
+    """
+
+    def __init__(self, inner, known_memory_ids, trace=False):
         self._inner = inner
+        self._known_memory_ids = known_memory_ids
+        self._trace = trace
 
     def get_completion(self, prompt, response_format=None, temperature=0.7):
         response = self._inner.get_completion(prompt, response_format=response_format, temperature=temperature)
-        # Tracing must never be the reason a call fails -- upstream's own
-        # process_memory will separately print "Error in memory evolution"
-        # and recover if this response is unparseable; mirror that here,
-        # don't propagate.
+        # A validation/tracing bug must never be the reason a call fails --
+        # upstream's own process_memory will separately print "Error in
+        # memory evolution" and recover if this response is unparseable;
+        # mirror that here, don't propagate.
         try:
             decision = parse_json_response(response)
         except Exception:
             decision = None
-        if isinstance(decision, dict) and "should_evolve" in decision:
-            print(
-                f"  [trace:evolution] should_evolve={decision.get('should_evolve')} "
-                f"actions={decision.get('actions')} "
-                f"suggested_connections={decision.get('suggested_connections')} "
-                f"tags_to_update={decision.get('tags_to_update')}"
-            )
-        else:
-            print(f"  [trace:evolution] unparseable response: {str(response)[:200]!r}")
+
+        if isinstance(decision, dict) and decision.get("should_evolve"):
+            suggested = decision.get("suggested_connections") or []
+            if suggested and not any(conn in self._known_memory_ids for conn in suggested):
+                print(
+                    f"  [evolution guard] rejected: suggested_connections={suggested} "
+                    "match no real memory id -- treating the decision as fabricated, "
+                    "forcing should_evolve=False"
+                )
+                decision["should_evolve"] = False
+                decision["actions"] = []
+                response = json.dumps(decision)
+
+        if self._trace:
+            if isinstance(decision, dict) and "should_evolve" in decision:
+                print(
+                    f"  [trace:evolution] should_evolve={decision.get('should_evolve')} "
+                    f"actions={decision.get('actions')} "
+                    f"suggested_connections={decision.get('suggested_connections')} "
+                    f"tags_to_update={decision.get('tags_to_update')} "
+                    f"new_context_neighborhood={decision.get('new_context_neighborhood')} "
+                    f"new_tags_neighborhood={decision.get('new_tags_neighborhood')}"
+                )
+            else:
+                print(f"  [trace:evolution] unparseable response: {str(response)[:200]!r}")
         return response
+
 
 # Same fields add_note() writes into ChromaDB metadata (memory_system.py) --
 # kept in sync manually, same reasoning as _NOTE_ANALYSIS_SCHEMA below.
@@ -160,18 +196,19 @@ class PromptInjectableMemorySystem(AgenticMemorySystem):
             kwargs.setdefault("keywords", analysis["keywords"])
             kwargs.setdefault("context", analysis["context"])
             kwargs.setdefault("tags", analysis["tags"])
-        if not self._trace:
-            return super().add_note(content, time=time, **kwargs)
 
         # Evolution (process_memory) is upstream code we don't call
-        # ourselves -- add_note() triggers it internally. Swap in a tracing
-        # backend just for this call so evolution's LLM response gets
-        # printed too, then restore the real one immediately after.
+        # ourselves -- add_note() triggers it internally. Swap in a guard
+        # backend just for this call so its LLM response gets validated
+        # (docs/decisions/0012, always) and optionally printed
+        # (docs/decisions/0011, only when self._trace), then restore the
+        # real one immediately after.
         if not self.memories:
-            print("  [trace:evolution] skipped (first memory, nothing to compare against)")
+            if self._trace:
+                print("  [trace:evolution] skipped (first memory, nothing to compare against)")
             return super().add_note(content, time=time, **kwargs)
         real_backend = self.llm_controller.llm
-        self.llm_controller.llm = _EvolutionTraceBackend(real_backend)
+        self.llm_controller.llm = _EvolutionGuardBackend(real_backend, set(self.memories.keys()), trace=self._trace)
         try:
             return super().add_note(content, time=time, **kwargs)
         finally:

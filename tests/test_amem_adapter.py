@@ -230,7 +230,7 @@ def test_trace_true_prints_evolution_details_on_second_note(fake_agentic_memory,
     fake_agentic_memory["llm_responses"] = [
         '{"keywords": ["hiking"], "context": "hobbies", "tags": ["x"]}',  # note 1 construction
         '{"keywords": ["camping"], "context": "hobbies", "tags": ["y"]}',  # note 2 construction
-        '{"should_evolve": true, "actions": ["strengthen"], "suggested_connections": ["n1"], '
+        '{"should_evolve": true, "actions": ["strengthen"], "suggested_connections": ["note-1"], '
         '"tags_to_update": ["outdoors"], "new_context_neighborhood": [], "new_tags_neighborhood": []}',  # evolution
     ]
     system = PromptInjectableMemorySystem(
@@ -240,7 +240,7 @@ def test_trace_true_prints_evolution_details_on_second_note(fake_agentic_memory,
         trace=True,
     )
 
-    system.add_note("Alice: I love hiking.", time="t1")
+    system.add_note("Alice: I love hiking.", time="t1", id="note-1")
     capsys.readouterr()  # discard first note's trace, only care about the second below
     system.add_note("Alice: I also love camping.", time="t2")
 
@@ -248,8 +248,43 @@ def test_trace_true_prints_evolution_details_on_second_note(fake_agentic_memory,
     assert "[trace:note_construction]" in out
     assert "keywords=['camping']" in out
     assert "[trace:evolution]" in out
+    # "note-1" is note 1's real id -- a legitimate decision, not rejected.
     assert "should_evolve=True" in out
     assert "actions=['strengthen']" in out
+    assert "[evolution guard] rejected" not in out
+
+
+def test_evolution_guard_rejects_fabricated_connections(fake_agentic_memory, capsys):
+    """Real example from a live Llama 3.2:1b run: an evolution decision
+    with should_evolve=True whose suggested_connections/tags_to_update
+    were placeholder-shaped strings ('memory_index_0', 'keywords_0', ...)
+    that matched no real memory -- upstream would apply this verbatim
+    (note.links.extend(...), note.tags = ...), silently overwriting the
+    note's real tags with garbage. The guard must reject it before that
+    happens, regardless of trace."""
+    from amem_gepa.amem_adapter import PromptInjectableMemorySystem
+
+    fake_agentic_memory["llm_responses"] = [
+        '{"keywords": ["hiking"], "context": "hobbies", "tags": ["x"]}',
+        '{"keywords": ["camping"], "context": "hobbies", "tags": ["y"]}',
+        '{"should_evolve": true, "actions": ["strengthen", "update_neighbor"], '
+        '"suggested_connections": ["memory_index_0", "memory_index_1"], '
+        '"tags_to_update": ["keywords_0", "memory_tags_0"], '
+        '"new_context_neighborhood": [], "new_tags_neighborhood": []}',
+    ]
+    system = PromptInjectableMemorySystem(
+        note_construction_prompt="construct {content}",
+        evolution_prompt="evolve",
+        llm_model="ollama/llama3.2:1b",
+        trace=False,  # guard must fire even without tracing on
+    )
+
+    system.add_note("Alice: I love hiking.", time="t1", id="note-1")
+    system.add_note("Alice: I also love camping.", time="t2")
+
+    out = capsys.readouterr().out
+    assert "[evolution guard] rejected" in out
+    assert "memory_index_0" in out
 
 
 def test_trace_false_by_default_produces_no_trace_output(fake_agentic_memory, capsys):
