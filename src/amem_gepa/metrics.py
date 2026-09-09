@@ -1,12 +1,20 @@
 """Scoring for LoCoMo QA answers.
 
-The paper reports ROUGE-L on LoCoMo (docs/01-related-work.md), so categories
-1-4 (single-hop, temporal, multi-hop, open-domain) are scored with ROUGE-L
-F1 against the gold answer. Category 5 (adversarial) has no gold answer to
-compare against -- its `answer` field is null and the "trap" is in
-`adversarial_answer` (docs/decisions/0004) -- so it's scored on whether the
-system avoided confidently reproducing that trap answer, not on text overlap
-with a reference.
+Ported from the paper's own eval code (Maharana et al., ACL 2024) --
+snap-research/locomo, `task_eval/evaluation.py` -- not a generic F1/ROUGE
+implementation. Category 1 (multi-hop) uses a comma-split multi-answer F1;
+categories 2/3/4 (temporal/open-domain/single-hop) use plain single-answer
+F1; category 5 (adversarial) is scored on two literal refusal phrases, not
+text overlap, since there's no gold answer to compare against -- its
+`answer` field is null, the "trap" is in `adversarial_answer`
+(docs/decisions/0004, 0010).
+
+`docs/decisions/0009` and an earlier version of this file used ROUGE-L
+because a secondary web summary (wrongly) described the paper's metric as
+ROUGE-L -- corrected once the actual paper table was available
+(docs/decisions/0010). `rouge_l_f1` is kept below since it's still
+reasonable as a secondary signal, but `score_answer`/`score_batch` use the
+paper-matching F1 by default.
 
 Per docs/decisions/0004, report per-category, not just one blended number --
 `score_batch` returns both.
@@ -16,15 +24,25 @@ from __future__ import annotations
 
 import random
 import re
-from collections import defaultdict
+import string
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Optional
 
+from nltk.stem import PorterStemmer
+
 from amem_gepa.datasets.locomo import CATEGORY_LABELS
 
-ADVERSARIAL_OVERLAP_THRESHOLD = 0.5
-
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+_ARTICLE_PATTERN = re.compile(r"\b(a|an|the|and)\b")
+_PUNCTUATION = set(string.punctuation)
+_stemmer = PorterStemmer()
+
+# Category 5 (adversarial) scoring, verbatim from the paper's eval script:
+# a literal substring check for one of these two refusal phrases, not text
+# overlap with anything. Brittle by construction -- matches the paper's own
+# known limitation, not something to "improve" on while the goal is fidelity.
+_ADVERSARIAL_REFUSAL_PHRASES = ("no information available", "not mentioned")
 
 
 def _lcs_length(a: list[str], b: list[str]) -> int:
@@ -42,16 +60,9 @@ def _tokenize(text: str) -> list[str]:
 
 
 def rouge_l_f1(prediction: str, reference: str) -> float:
-    """Standard LCS-based ROUGE-L F1 (Lin, 2004), lowercased and split on
-    alphanumeric runs -- NOT plain `.split()` (see git history: that version
-    tokenized on whitespace only, so a real "...is transgender." never
-    matched gold "Transgender woman" because the trailing period made
-    "transgender." a different token from "transgender"; a full run against
-    real Llama 3.2:1b baseline output showed this roughly doubled every
-    category's score once fixed, since chatty full-sentence answers very
-    often have the answer word followed by punctuation). Not necessarily
-    bit-identical to whatever toolkit the paper used -- fine for a sanity
-    check, not for claiming an exact reproduction (docs/decisions/0006)."""
+    """Standard LCS-based ROUGE-L F1 (Lin, 2004). Not the paper's metric
+    (see module docstring) -- kept as an available secondary signal, not
+    used by score_answer/score_batch."""
     pred_tokens = _tokenize(prediction)
     ref_tokens = _tokenize(reference)
     if not pred_tokens or not ref_tokens:
@@ -64,15 +75,58 @@ def rouge_l_f1(prediction: str, reference: str) -> float:
     return 2 * precision * recall / (precision + recall)
 
 
-def score_adversarial(prediction: str, adversarial_answer: str) -> float:
-    """1.0 if the system avoided confidently asserting the trap answer,
-    0.0 if it reproduced it. Heuristic (docs/decisions/0006): treat high
-    text overlap with `adversarial_answer` as having fallen for the trap,
-    regardless of phrasing. Revisit this threshold once real outputs from
-    milestone-2's reproduction run are available -- it hasn't been tuned
-    against real model outputs yet."""
-    overlap = rouge_l_f1(prediction, adversarial_answer)
-    return 0.0 if overlap >= ADVERSARIAL_OVERLAP_THRESHOLD else 1.0
+def normalize_answer(s: str) -> str:
+    """Paper's exact normalization (task_eval/evaluation.py:normalize_answer):
+    strip commas, lowercase, strip punctuation, strip articles (a/an/the/and
+    -- yes, "and" too, that's their regex not a typo here), collapse
+    whitespace."""
+    s = str(s).replace(",", "")
+    s = s.lower()
+    s = "".join(ch for ch in s if ch not in _PUNCTUATION)
+    s = _ARTICLE_PATTERN.sub(" ", s)
+    return " ".join(s.split())
+
+
+def _stemmed_tokens(text: str) -> list[str]:
+    return [_stemmer.stem(w) for w in normalize_answer(text).split()]
+
+
+def f1_score(prediction: str, ground_truth: str) -> float:
+    """Single-answer F1 (task_eval/evaluation.py:f1_score): normalize +
+    Porter-stem both sides, multiset (Counter) token overlap."""
+    pred_tokens = _stemmed_tokens(prediction)
+    gt_tokens = _stemmed_tokens(ground_truth)
+    common = Counter(pred_tokens) & Counter(gt_tokens)
+    num_same = sum(common.values())
+    if num_same == 0:
+        return 0.0
+    precision = num_same / len(pred_tokens)
+    recall = num_same / len(gt_tokens)
+    return 2 * precision * recall / (precision + recall)
+
+
+def f1_multi_answer(prediction: str, ground_truth: str) -> float:
+    """Comma-split multi-answer F1 (task_eval/evaluation.py:f1), used only
+    for category 1 (multi-hop) -- gold answers there are often several
+    comma-separated facts (e.g. "pottery, camping, painting, swimming")
+    drawn from different sessions. Splits both sides on commas, then for
+    each gold sub-answer takes the best-matching predicted sub-phrase and
+    averages across gold sub-answers."""
+    predictions = [p.strip() for p in prediction.split(",")]
+    ground_truths = [g.strip() for g in ground_truth.split(",")]
+    per_gt = [max(f1_score(p, gt) for p in predictions) for gt in ground_truths]
+    return sum(per_gt) / len(per_gt)
+
+
+def score_adversarial(prediction: str) -> float:
+    """Paper's exact adversarial check (task_eval/evaluation.py:
+    eval_question_answering, category 5 branch): 1.0 if the prediction
+    contains one of two literal refusal phrases, 0.0 otherwise. Not text
+    overlap with `adversarial_answer` -- the paper's own method doesn't
+    look at the trap text at all, only whether the model said one of these
+    specific things."""
+    lowered = prediction.lower()
+    return 1.0 if any(phrase in lowered for phrase in _ADVERSARIAL_REFUSAL_PHRASES) else 0.0
 
 
 def score_answer(
@@ -82,10 +136,17 @@ def score_answer(
     adversarial_answer: Optional[str] = None,
 ) -> float:
     if category == 5:
-        assert adversarial_answer is not None, "category 5 requires adversarial_answer"
-        return score_adversarial(prediction, adversarial_answer)
+        return score_adversarial(prediction)
     assert gold_answer is not None, f"category {category} requires gold_answer"
-    return rouge_l_f1(prediction, str(gold_answer))
+    gold_answer = str(gold_answer)
+    if category == 3:
+        # Paper quirk (task_eval/evaluation.py:eval_question_answering):
+        # open-domain gold answers can carry semicolon-separated variants;
+        # only the first is used as canonical.
+        gold_answer = gold_answer.split(";")[0].strip()
+    if category == 1:
+        return f1_multi_answer(prediction, gold_answer)
+    return f1_score(prediction, gold_answer)
 
 
 @dataclass

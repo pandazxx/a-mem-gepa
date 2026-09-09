@@ -11,9 +11,21 @@ committed.
 Verified against the real file (see docs/01-related-work.md) rather than
 trusting secondary summaries: 10 conversations, 1,986 QA pairs total,
 5 categories via the integer `category` field:
-    1 = single-hop, 2 = temporal, 3 = multi-hop, 4 = open-domain,
+    1 = multi-hop, 2 = temporal, 3 = open-domain, 4 = single-hop,
     5 = adversarial (answer is null; the "trap" answer is in
     `adversarial_answer`).
+
+This mapping is NOT the paper's narrative presentation order (which lists
+single-hop, multi-hop, temporal, open-domain, adversarial as 1-5 in prose)
+-- it's the actual `category` field-to-name mapping, confirmed by matching
+each category's exact question count against the paper's own QA Benchmark
+Statistics appendix: single-hop retrieval=841, multi-hop retrieval=282,
+temporal reasoning=321, open-domain knowledge=96, adversarial=446. Those
+counts are unique enough to pin down the mapping unambiguously against
+what `category_counts_by_conversation` finds in the real data (see
+docs/decisions/0010) -- an earlier version of this file had 1 and 4 swapped
+and mislabeled 3, discovered only once real per-category numbers were
+compared against the paper's own benchmark table.
 """
 
 from __future__ import annotations
@@ -32,10 +44,10 @@ RAW_PATH = Path("data/locomo10.json")
 SPLIT_MANIFEST_PATH = Path("configs/locomo_split.json")
 
 CATEGORY_LABELS = {
-    1: "single_hop",
+    1: "multi_hop",
     2: "temporal",
-    3: "multi_hop",
-    4: "open_domain",
+    3: "open_domain",
+    4: "single_hop",
     5: "adversarial",
 }
 

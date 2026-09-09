@@ -12,8 +12,16 @@ contrary to what [decisions/0001](0001-base-repo-and-benchmark.md) assumed)
 ships a question-answering step. `AgenticMemorySystem.search`/`search_agentic`
 only retrieve memory notes (pure ChromaDB/embedding similarity, no LLM call)
 -- there's no "given these retrieved notes, answer the question" prompt
-anywhere in either repo. To report QA accuracy/ROUGE-L at all, our own eval
-loop needs to add that step.
+anywhere in either repo. To report the paper's F1 metric
+(see [decisions/0010](0010-paper-exact-f1-and-category-fix.md)) at all, our
+own eval loop needs to add that step.
+
+Note (added retroactively, see 0010): this prompt asks the model to "say so
+explicitly" when it can't answer a question, but the paper's actual
+adversarial scoring only credits two exact phrases ("no information
+available", "not mentioned") -- this prompt doesn't specifically elicit
+either one. Worth revisiting once the F1 fix's effect on adversarial scores
+is understood.
 
 ## Decision
 

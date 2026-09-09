@@ -39,14 +39,14 @@ def _make_instances():
             turns=turns,
             question="What does Alice love?",
             gold_answer="hiking",
-            category=1,
+            category=1,  # multi_hop
         ),
         LoCoMoInstance(
             conversation_id="conv-x",
             turns=turns,
             question="What did Alice realize about hiking?",
             gold_answer=None,
-            category=5,
+            category=5,  # adversarial
             adversarial_answer="hiking is dangerous",
         ),
     ]
@@ -62,7 +62,7 @@ def test_evaluate_candidate_replays_turns_once_per_conversation():
             evolution_prompt,
             answers_by_question={
                 "What does Alice love?": "hiking",
-                "What did Alice realize about hiking?": "There isn't enough information to say.",
+                "What did Alice realize about hiking?": "That is not mentioned in the retrieved memories.",
             },
         )
         created_systems.append(system)
@@ -82,7 +82,7 @@ def test_evaluate_candidate_replays_turns_once_per_conversation():
     assert len(created_systems[0].notes) == 2, "both turns should have been replayed"
     assert len(result.instance_results) == 2
     assert result.summaries["aggregate"].n == 2
-    assert result.summaries["single_hop"].mean == 1.0
+    assert result.summaries["multi_hop"].mean == 1.0
     assert result.summaries["adversarial"].mean == 1.0
 
 
