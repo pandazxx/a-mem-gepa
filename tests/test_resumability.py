@@ -183,3 +183,41 @@ def test_resumed_run_does_not_re_answer_already_cached_questions(tmp_path):
     assert predictions_by_q["Q1?"] == "answer one"  # reused from cache, not regenerated
     assert predictions_by_q["Q2?"] == "answer two"
     assert predictions_by_q["Q3?"] == "answer three"
+
+
+def test_cached_predictions_are_rescored_with_the_current_metric(tmp_path):
+    """A metrics.py bug fix (e.g. the tokenization fix that made real correct
+    answers stop scoring 0.0) must not require redoing the LLM work --
+    cached predictions should be rescored fresh, not trusted at whatever
+    score.py version happened to write them."""
+    turns = _turns(1)
+    instances = [LoCoMoInstance("conv-x", turns, "Q1?", "the correct gold answer", 1)]
+
+    predictions = PredictionStore("test-run-3", "test", results_dir=tmp_path)
+    predictions.append(
+        {
+            "conversation_id": "conv-x",
+            "question": "Q1?",
+            "category": 1,
+            "prediction": "the correct gold answer",
+            # deliberately wrong/stale score, as if written by a since-fixed metric
+            "score": 0.0,
+        }
+    )
+
+    def factory(note_construction_prompt, evolution_prompt):
+        return ResumableFakeMemorySystem({}, [])
+
+    result = evaluate_candidate(
+        instances,
+        note_construction_prompt="p",
+        evolution_prompt="e",
+        qa_prompt_template="{retrieved_memories} {question}",
+        llm_model="unused",
+        memory_system_factory=factory,
+        run_label="test-run-3",
+        split="test",
+        results_dir=tmp_path,
+    )
+
+    assert result.instance_results[0].score == 1.0

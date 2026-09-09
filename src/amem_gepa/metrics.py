@@ -15,6 +15,7 @@ Per docs/decisions/0004, report per-category, not just one blended number --
 from __future__ import annotations
 
 import random
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional
@@ -22,6 +23,8 @@ from typing import Optional
 from amem_gepa.datasets.locomo import CATEGORY_LABELS
 
 ADVERSARIAL_OVERLAP_THRESHOLD = 0.5
+
+_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
 
 def _lcs_length(a: list[str], b: list[str]) -> int:
@@ -34,13 +37,23 @@ def _lcs_length(a: list[str], b: list[str]) -> int:
     return prev[-1]
 
 
+def _tokenize(text: str) -> list[str]:
+    return _TOKEN_PATTERN.findall(str(text).lower())
+
+
 def rouge_l_f1(prediction: str, reference: str) -> float:
-    """Standard LCS-based ROUGE-L F1 (Lin, 2004), whitespace-tokenized,
-    case-insensitive. Not necessarily bit-identical to whatever toolkit the
-    paper used -- fine for a sanity check, not for claiming an exact
-    reproduction (docs/decisions/0006)."""
-    pred_tokens = prediction.lower().split()
-    ref_tokens = reference.lower().split()
+    """Standard LCS-based ROUGE-L F1 (Lin, 2004), lowercased and split on
+    alphanumeric runs -- NOT plain `.split()` (see git history: that version
+    tokenized on whitespace only, so a real "...is transgender." never
+    matched gold "Transgender woman" because the trailing period made
+    "transgender." a different token from "transgender"; a full run against
+    real Llama 3.2:1b baseline output showed this roughly doubled every
+    category's score once fixed, since chatty full-sentence answers very
+    often have the answer word followed by punctuation). Not necessarily
+    bit-identical to whatever toolkit the paper used -- fine for a sanity
+    check, not for claiming an exact reproduction (docs/decisions/0006)."""
+    pred_tokens = _tokenize(prediction)
+    ref_tokens = _tokenize(reference)
     if not pred_tokens or not ref_tokens:
         return 0.0
     lcs = _lcs_length(pred_tokens, ref_tokens)

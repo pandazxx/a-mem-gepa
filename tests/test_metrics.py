@@ -24,6 +24,35 @@ def test_rouge_l_f1_empty_prediction():
     assert rouge_l_f1("", "some reference") == 0.0
 
 
+def test_rouge_l_f1_ignores_trailing_punctuation():
+    """Real example from a Llama 3.2:1b baseline run (results/baseline/test.json):
+    this used to score 0.0 despite containing the correct answer, because
+    plain .split() made "transgender." (with the period) a different token
+    from gold's "transgender"."""
+    score = rouge_l_f1(
+        "Based on the retrieved memories, Caroline's identity is transgender.",
+        "Transgender woman",
+    )
+    assert score > 0.0
+
+
+def test_rouge_l_f1_ignores_surrounding_quotes():
+    """Same class of real-run bug: a quoted answer like '"Single"' didn't
+    match plain "Single" under whitespace-only tokenization."""
+    score = rouge_l_f1(
+        'Based on the retrieved memories, Caroline\'s relationship status can be determined as:\n\n"Single"',
+        "Single",
+    )
+    assert score > 0.0
+
+
+def test_rouge_l_f1_accepts_non_string_reference():
+    """Some LoCoMo gold answers are raw ints (e.g. a bare year like 2022) --
+    score_answer str()s them, but rouge_l_f1/​_tokenize should tolerate a
+    non-string reference on its own too."""
+    assert rouge_l_f1("in 2022 she painted it", 2022) > 0.0
+
+
 def test_score_adversarial_avoided_trap():
     assert score_adversarial("I don't have enough information to answer that.", "self-care is important") == 1.0
 

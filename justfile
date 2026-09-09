@@ -28,6 +28,12 @@ eval candidate config="configs/base.yaml":
 split:
     uv run python scripts/make_locomo_split.py --out configs/locomo_split.json
 
+# Recompute a results/<run_label>/<split>.json's summaries with the current
+# metrics.py, no LLM calls -- for when metrics.py changes after a run already
+# finished (e.g. a scoring bug fix) and redoing the run isn't practical
+rescore results_path:
+    uv run python scripts/rescore.py {{results_path}}
+
 test:
     uv run pytest
 

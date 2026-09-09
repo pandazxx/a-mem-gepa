@@ -198,7 +198,13 @@ def evaluate_candidate(
         for inst in conv_instances:
             cached = prediction_store.get(conv_id, inst.question) if prediction_store is not None else None
             if cached is not None:
-                prediction, score = cached["prediction"], cached["score"]
+                # Reuse the cached prediction (that's the expensive part --
+                # an LLM call) but always rescore it fresh: metrics.py can
+                # change (it did -- a tokenization bug meant real correct
+                # answers scored 0.0) without invalidating every prediction
+                # cache on disk.
+                prediction = cached["prediction"]
+                score = _score_one(prediction, inst)
             else:
                 prediction = answer_question(memory_system, qa_prompt_template, inst.question, k=k)
                 score = _score_one(prediction, inst)
