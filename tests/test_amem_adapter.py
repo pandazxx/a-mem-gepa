@@ -85,6 +85,11 @@ def fake_agentic_memory(monkeypatch):
             self.retriever = _FakeRetriever()
 
         def add_note(self, content, time=None, **kwargs):
+            if self.memories:
+                # Mirrors upstream: process_memory() calls out to the LLM
+                # for an evolution decision once there's something to
+                # compare the new note against.
+                self.llm_controller.llm.get_completion("evolution prompt", response_format={})
             note = _FakeMemoryNote(content=content, timestamp=time, **kwargs)
             self.memories[note.id] = note
             self.retriever.add_document(note.content, {}, note.id)
@@ -96,8 +101,16 @@ def fake_agentic_memory(monkeypatch):
     fake_package = types.ModuleType("agentic_memory")
     fake_package.memory_system = fake_memory_system_module
 
+    calls["llm_call_count"] = 0
+
+    def fake_completion(**kwargs):
+        responses = calls["llm_responses"]
+        idx = min(calls["llm_call_count"], len(responses) - 1)
+        calls["llm_call_count"] += 1
+        return _FakeLiteLLMResponse(responses[idx])
+
     fake_litellm_module = types.ModuleType("litellm")
-    fake_litellm_module.completion = lambda **kwargs: _FakeLiteLLMResponse(calls["llm_responses"][0])
+    fake_litellm_module.completion = fake_completion
 
     monkeypatch.setitem(sys.modules, "agentic_memory", fake_package)
     monkeypatch.setitem(sys.modules, "agentic_memory.memory_system", fake_memory_system_module)
@@ -189,3 +202,75 @@ def test_snapshot_and_restore_roundtrip_without_llm_calls(fake_agentic_memory):
     assert restored_note.keywords == ["hiking"]
     assert restored_note.context == "hobbies"
     assert len(restored.retriever.documents) == 1
+
+
+def test_trace_true_prints_note_construction_details(fake_agentic_memory, capsys):
+    from amem_gepa.amem_adapter import PromptInjectableMemorySystem
+
+    fake_agentic_memory["llm_responses"][0] = '{"keywords": ["hiking"], "context": "hobbies", "tags": ["x"]}'
+    system = PromptInjectableMemorySystem(
+        note_construction_prompt="construct {content}",
+        evolution_prompt="evolve",
+        llm_model="ollama/llama3.2:1b",
+        trace=True,
+    )
+
+    system.add_note("Alice: I love hiking.", time="t1")  # first note -- nothing to evolve against
+
+    out = capsys.readouterr().out
+    assert "[trace:note_construction]" in out
+    assert "keywords=['hiking']" in out
+    assert "[trace:evolution] skipped" in out  # correctly skipped, nothing to compare against yet
+    assert "should_evolve" not in out  # no actual evolution decision was made
+
+
+def test_trace_true_prints_evolution_details_on_second_note(fake_agentic_memory, capsys):
+    from amem_gepa.amem_adapter import PromptInjectableMemorySystem
+
+    fake_agentic_memory["llm_responses"] = [
+        '{"keywords": ["hiking"], "context": "hobbies", "tags": ["x"]}',  # note 1 construction
+        '{"keywords": ["camping"], "context": "hobbies", "tags": ["y"]}',  # note 2 construction
+        '{"should_evolve": true, "actions": ["strengthen"], "suggested_connections": ["n1"], '
+        '"tags_to_update": ["outdoors"], "new_context_neighborhood": [], "new_tags_neighborhood": []}',  # evolution
+    ]
+    system = PromptInjectableMemorySystem(
+        note_construction_prompt="construct {content}",
+        evolution_prompt="evolve",
+        llm_model="ollama/llama3.2:1b",
+        trace=True,
+    )
+
+    system.add_note("Alice: I love hiking.", time="t1")
+    capsys.readouterr()  # discard first note's trace, only care about the second below
+    system.add_note("Alice: I also love camping.", time="t2")
+
+    out = capsys.readouterr().out
+    assert "[trace:note_construction]" in out
+    assert "keywords=['camping']" in out
+    assert "[trace:evolution]" in out
+    assert "should_evolve=True" in out
+    assert "actions=['strengthen']" in out
+
+
+def test_trace_false_by_default_produces_no_trace_output(fake_agentic_memory, capsys):
+    """Regression guard: run_baseline.py/run_eval.py never pass trace=True,
+    so this must stay silent by default."""
+    from amem_gepa.amem_adapter import PromptInjectableMemorySystem
+
+    fake_agentic_memory["llm_responses"] = [
+        '{"keywords": ["hiking"], "context": "hobbies", "tags": ["x"]}',
+        '{"keywords": ["camping"], "context": "hobbies", "tags": ["y"]}',
+        '{"should_evolve": false, "actions": [], "suggested_connections": [], '
+        '"tags_to_update": [], "new_context_neighborhood": [], "new_tags_neighborhood": []}',
+    ]
+    system = PromptInjectableMemorySystem(
+        note_construction_prompt="construct {content}",
+        evolution_prompt="evolve",
+        llm_model="ollama/llama3.2:1b",
+    )
+
+    system.add_note("Alice: I love hiking.", time="t1")
+    system.add_note("Alice: I also love camping.", time="t2")
+
+    out = capsys.readouterr().out
+    assert "[trace:" not in out

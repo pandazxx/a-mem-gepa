@@ -26,6 +26,38 @@ from agentic_memory.memory_system import AgenticMemorySystem, MemoryNote
 
 from amem_gepa.llm.litellm_controller import LiteLLMController, parse_json_response
 
+
+class _EvolutionTraceBackend:
+    """Wraps a LiteLLMBackend so the evolution-step LLM call prints its
+    parsed decision (docs/decisions/0011) -- only installed for the
+    duration of one super().add_note() call, and only when trace=True.
+    Note-construction tracing doesn't need this: analyze_content() already
+    parses its own response and can print directly."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def get_completion(self, prompt, response_format=None, temperature=0.7):
+        response = self._inner.get_completion(prompt, response_format=response_format, temperature=temperature)
+        # Tracing must never be the reason a call fails -- upstream's own
+        # process_memory will separately print "Error in memory evolution"
+        # and recover if this response is unparseable; mirror that here,
+        # don't propagate.
+        try:
+            decision = parse_json_response(response)
+        except Exception:
+            decision = None
+        if isinstance(decision, dict) and "should_evolve" in decision:
+            print(
+                f"  [trace:evolution] should_evolve={decision.get('should_evolve')} "
+                f"actions={decision.get('actions')} "
+                f"suggested_connections={decision.get('suggested_connections')} "
+                f"tags_to_update={decision.get('tags_to_update')}"
+            )
+        else:
+            print(f"  [trace:evolution] unparseable response: {str(response)[:200]!r}")
+        return response
+
 # Same fields add_note() writes into ChromaDB metadata (memory_system.py) --
 # kept in sync manually, same reasoning as _NOTE_ANALYSIS_SCHEMA below.
 _NOTE_FIELDS = [
@@ -73,6 +105,7 @@ class PromptInjectableMemorySystem(AgenticMemorySystem):
         evolution_prompt: str,
         llm_model: str,
         llm_api_base: Optional[str] = None,
+        trace: bool = False,
         **kwargs,
     ):
         # AgenticMemorySystem.__init__ unconditionally builds a real
@@ -88,6 +121,10 @@ class PromptInjectableMemorySystem(AgenticMemorySystem):
         self.llm_controller = LiteLLMController(model=llm_model, api_base=llm_api_base)
         self._note_construction_prompt = note_construction_prompt
         self._evolution_system_prompt = evolution_prompt
+        # docs/decisions/0011 -- verbose per-call tracing, `just demo` only.
+        # `just baseline`/`just eval` never pass trace=True, so this is a
+        # no-op there.
+        self._trace = trace
 
     def analyze_content(self, content: str) -> dict:
         prompt = self._note_construction_prompt.format(content=content)
@@ -104,11 +141,18 @@ class PromptInjectableMemorySystem(AgenticMemorySystem):
         # response that happens to close its braces early. A successful
         # parse isn't the same as a complete one; fill in the same defaults
         # upstream uses on an outright parse failure, per key, not just here.
-        return {
+        result = {
             "keywords": parsed.get("keywords") or [],
             "context": parsed.get("context") or "General",
             "tags": parsed.get("tags") or [],
         }
+        if self._trace:
+            print(
+                f"  [trace:note_construction] content={content!r}\n"
+                f"  [trace:note_construction] -> keywords={result['keywords']} "
+                f"context={result['context']!r} tags={result['tags']}"
+            )
+        return result
 
     def add_note(self, content: str, time: str = None, **kwargs) -> str:
         if "keywords" not in kwargs:
@@ -116,7 +160,22 @@ class PromptInjectableMemorySystem(AgenticMemorySystem):
             kwargs.setdefault("keywords", analysis["keywords"])
             kwargs.setdefault("context", analysis["context"])
             kwargs.setdefault("tags", analysis["tags"])
-        return super().add_note(content, time=time, **kwargs)
+        if not self._trace:
+            return super().add_note(content, time=time, **kwargs)
+
+        # Evolution (process_memory) is upstream code we don't call
+        # ourselves -- add_note() triggers it internally. Swap in a tracing
+        # backend just for this call so evolution's LLM response gets
+        # printed too, then restore the real one immediately after.
+        if not self.memories:
+            print("  [trace:evolution] skipped (first memory, nothing to compare against)")
+            return super().add_note(content, time=time, **kwargs)
+        real_backend = self.llm_controller.llm
+        self.llm_controller.llm = _EvolutionTraceBackend(real_backend)
+        try:
+            return super().add_note(content, time=time, **kwargs)
+        finally:
+            self.llm_controller.llm = real_backend
 
     def snapshot_notes(self) -> list[dict]:
         """JSON-serializable dump of every note built so far, for

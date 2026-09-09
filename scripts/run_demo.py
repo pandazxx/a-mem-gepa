@@ -7,7 +7,12 @@ multi-conversation, multi-hundred-question milestone-2 reproduction run
 (which took multiple days against Llama 3.2:1b).
 
 Prints every question/prediction/score, not just a summary, since the point
-is a human sanity-checking whether the answers look reasonable.
+is a human sanity-checking whether the answers look reasonable. Traces the
+internals by default (docs/decisions/0011): note construction, evolution
+decisions, retrieval, and the QA-answer call, so the whole pipeline is
+visible turn by turn -- `just baseline`/`just eval` never enable this, so
+a real reproduction run's output stays clean. Pass --no-trace for the
+quieter Q/A-only view.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ def main(
     config: str = typer.Option("configs/base.yaml", "--config"),
     max_turns: int = typer.Option(15, "--max-turns"),
     max_questions: int = typer.Option(5, "--max-questions"),
+    trace: bool = typer.Option(True, "--trace/--no-trace", help="Print note construction/evolution/retrieval/answer details"),
 ):
     load_dotenv()
     cfg = load_config(config)
@@ -45,6 +51,12 @@ def main(
         f"{instances[0].conversation_id!r}, first {max_turns} turns, "
         f"model={cfg['models']['amem_llm_model']!r}"
     )
+    if trace:
+        print(
+            "[demo] tracing enabled -- this re-runs live even if you've run "
+            "`just demo` before, ignoring any cached predictions, so you can "
+            "watch it happen (pass --no-trace to skip this and use the cache)"
+        )
 
     result = evaluate_candidate(
         instances,
@@ -58,6 +70,7 @@ def main(
         n_bootstrap_resamples=200,
         run_label="demo",
         split="demo",
+        trace=trace,
     )
 
     for r in result.instance_results:

@@ -56,7 +56,7 @@ class EvalResult:
 
 
 def _default_memory_system_factory(
-    llm_model: str, llm_api_base: Optional[str], embedding_model: str
+    llm_model: str, llm_api_base: Optional[str], embedding_model: str, trace: bool = False
 ) -> MemorySystemFactory:
     # Imported lazily: pulls in agentic_memory (ChromaDB, sentence-transformers,
     # ...) which tests that inject a fake factory shouldn't need installed.
@@ -69,6 +69,7 @@ def _default_memory_system_factory(
             llm_model=llm_model,
             llm_api_base=llm_api_base,
             model_name=embedding_model,
+            trace=trace,
         )
 
     return factory
@@ -80,9 +81,14 @@ def replay_conversation(
     checkpoint_store: Optional[CheckpointStore] = None,
     conversation_id: Optional[str] = None,
     progress: Optional[ProgressReporter] = None,
+    trace: bool = False,
 ) -> None:
     start_index = 0
-    if checkpoint_store is not None:
+    # trace is a request to watch the process happen live -- honoring the
+    # cache would mean a fully-cached demo run (the common case, since it's
+    # meant to be rerun) shows nothing at all. Still writes to the cache
+    # below, just doesn't read from it.
+    if checkpoint_store is not None and not trace:
         checkpoint = checkpoint_store.load(conversation_id)
         if checkpoint is not None:
             memory_system.restore_notes(checkpoint.notes)
@@ -90,6 +96,8 @@ def replay_conversation(
 
     for i in range(start_index, len(turns)):
         turn = turns[i]
+        if trace:
+            print(f"\n[trace:turn {i + 1}/{len(turns)}] {turn.speaker}: {turn.text}")
         memory_system.add_note(f"{turn.speaker}: {turn.text}", time=turn.date_time)
         if progress is not None:
             progress.tick(f"conv={conversation_id} turn={i + 1}/{len(turns)}")
@@ -120,12 +128,20 @@ def answer_question(
     qa_prompt_template: str,
     question: str,
     k: int = 10,
+    trace: bool = False,
 ) -> str:
     retrieved = memory_system.search_agentic(question, k=k)
+    if trace:
+        print(f"  [trace:retrieval] query={question!r} -> {len(retrieved)} memories:")
+        for mem in retrieved:
+            print(f"    - [{mem.get('timestamp', '')}] {mem['content']!r} (context={mem.get('context', '')!r})")
     prompt = qa_prompt_template.format(
         retrieved_memories=_format_retrieved_memories(retrieved), question=question
     )
-    return memory_system.llm_controller.llm.get_completion(prompt, response_format=None)
+    response = memory_system.llm_controller.llm.get_completion(prompt, response_format=None)
+    if trace:
+        print(f"  [trace:qa_answer] -> {response!r}")
+    return response
 
 
 def _score_one(prediction: str, inst: LoCoMoInstance) -> float:
@@ -148,6 +164,7 @@ def evaluate_candidate(
     run_label: Optional[str] = None,
     split: str = "default",
     results_dir: Path = Path("results"),
+    trace: bool = False,
 ) -> EvalResult:
     """Evaluate one (note_construction_prompt, evolution_prompt) candidate
     against `instances`. `memory_system_factory` is injectable so tests can
@@ -156,9 +173,13 @@ def evaluate_candidate(
     Pass `run_label` to make this resumable: replayed turns and answered
     questions are checkpointed to results/<run_label>/ as they complete, and
     a rerun with the same run_label+split picks up where it left off instead
-    of starting over (checkpoint.py)."""
+    of starting over (checkpoint.py).
+
+    `trace` (docs/decisions/0011) prints every note-construction/evolution/
+    retrieval/QA-answer step -- meant for `just demo` only. run_baseline.py/
+    run_eval.py never pass it, so `just baseline` stays clean regardless."""
     factory = memory_system_factory or _default_memory_system_factory(
-        llm_model, llm_api_base, embedding_model
+        llm_model, llm_api_base, embedding_model, trace=trace
     )
 
     by_conversation: dict[str, list[LoCoMoInstance]] = defaultdict(list)
@@ -171,17 +192,25 @@ def evaluate_candidate(
     progress_replay: Optional[ProgressReporter] = None
     progress_answer: Optional[ProgressReporter] = None
     if run_label:
-        existing_checkpoints = {conv_id: checkpoint_store.load(conv_id) for conv_id in by_conversation}
         total_turns = sum(len(conv_instances[0].turns) for conv_instances in by_conversation.values())
-        done_turns = sum(c.turns_processed for c in existing_checkpoints.values() if c is not None)
-        done_conversations = sum(1 for c in existing_checkpoints.values() if c is not None and c.completed)
-        print(
-            f"[{run_label}] resuming: {done_conversations}/{len(by_conversation)} conversations "
-            f"already replayed, {len(prediction_store)}/{len(instances)} questions already answered"
-        )
+        if trace:
+            # Cache reads are bypassed below, so report this as the fresh
+            # run it actually is rather than stale "already done" numbers.
+            print(f"[{run_label}] trace mode: re-running live, ignoring cached turns/predictions")
+            done_turns = 0
+            done_questions = 0
+        else:
+            existing_checkpoints = {conv_id: checkpoint_store.load(conv_id) for conv_id in by_conversation}
+            done_turns = sum(c.turns_processed for c in existing_checkpoints.values() if c is not None)
+            done_conversations = sum(1 for c in existing_checkpoints.values() if c is not None and c.completed)
+            done_questions = len(prediction_store)
+            print(
+                f"[{run_label}] resuming: {done_conversations}/{len(by_conversation)} conversations "
+                f"already replayed, {done_questions}/{len(instances)} questions already answered"
+            )
         progress_replay = ProgressReporter(total=total_turns, label=f"{run_label}:replay", done=done_turns)
         progress_answer = ProgressReporter(
-            total=len(instances), label=f"{run_label}:answer", done=len(prediction_store)
+            total=len(instances), label=f"{run_label}:answer", done=done_questions
         )
 
     instance_results: list[InstanceResult] = []
@@ -193,10 +222,18 @@ def evaluate_candidate(
             checkpoint_store=checkpoint_store,
             conversation_id=conv_id,
             progress=progress_replay,
+            trace=trace,
         )
 
         for inst in conv_instances:
-            cached = prediction_store.get(conv_id, inst.question) if prediction_store is not None else None
+            # Same reasoning as replay_conversation's cache bypass above --
+            # trace means "show me this happening," so skip reading the
+            # cache (writes still happen below).
+            cached = (
+                prediction_store.get(conv_id, inst.question)
+                if prediction_store is not None and not trace
+                else None
+            )
             if cached is not None:
                 # Reuse the cached prediction (that's the expensive part --
                 # an LLM call) but always rescore it fresh: metrics.py can
@@ -206,7 +243,7 @@ def evaluate_candidate(
                 prediction = cached["prediction"]
                 score = _score_one(prediction, inst)
             else:
-                prediction = answer_question(memory_system, qa_prompt_template, inst.question, k=k)
+                prediction = answer_question(memory_system, qa_prompt_template, inst.question, k=k, trace=trace)
                 score = _score_one(prediction, inst)
                 if prediction_store is not None:
                     prediction_store.append(

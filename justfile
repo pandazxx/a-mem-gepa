@@ -8,7 +8,10 @@ setup:
     uv sync
 
 # Fast end-to-end sanity demo: one truncated conversation, a few questions
-# (docs/decisions/0008) -- run this before `just baseline`, not instead of it
+# (docs/decisions/0008) -- run this before `just baseline`, not instead of it.
+# Traces note construction/evolution/retrieval/answer by default
+# (docs/decisions/0011); run `uv run python scripts/run_demo.py --no-trace`
+# directly for the quieter Q/A-only view.
 demo config="configs/base.yaml" max_turns="15" max_questions="5":
     uv run python scripts/run_demo.py --config {{config}} --max-turns {{max_turns}} --max-questions {{max_questions}}
 

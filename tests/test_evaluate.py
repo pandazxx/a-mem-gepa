@@ -21,6 +21,12 @@ class FakeMemorySystem:
     def search_agentic(self, query, k=10):
         return [{"content": n, "timestamp": "t", "context": "c"} for n in self.notes[:k]]
 
+    def snapshot_notes(self):
+        return [{"content": n} for n in self.notes]
+
+    def restore_notes(self, notes):
+        self.notes.extend(n["content"] for n in notes)
+
     def _get_completion(self, prompt, response_format=None, temperature=0.7):
         for question, answer in self.answers_by_question.items():
             if question in prompt:
@@ -111,3 +117,105 @@ def test_evaluate_candidate_groups_by_conversation():
     )
 
     assert len(created) == 2, "two distinct conversations should build two memory systems"
+
+
+def test_trace_true_prints_turn_retrieval_and_answer_details(capsys):
+    instances = _make_instances()
+
+    def factory(note_construction_prompt, evolution_prompt):
+        return FakeMemorySystem(
+            note_construction_prompt,
+            evolution_prompt,
+            answers_by_question={
+                "What does Alice love?": "hiking",
+                "What did Alice realize about hiking?": "not mentioned",
+            },
+        )
+
+    evaluate_candidate(
+        instances,
+        note_construction_prompt="construct: {content}",
+        evolution_prompt="evolve",
+        qa_prompt_template="Memories:\n{retrieved_memories}\n\nQ: {question}",
+        llm_model="unused",
+        memory_system_factory=factory,
+        n_bootstrap_resamples=100,
+        trace=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "[trace:turn 1/2]" in out
+    assert "[trace:turn 2/2]" in out
+    assert "[trace:retrieval] query='What does Alice love?'" in out
+    assert "[trace:qa_answer] -> 'hiking'" in out
+
+
+def test_trace_false_by_default_prints_no_trace_lines(capsys):
+    """Regression guard: run_baseline.py/run_eval.py never pass trace=True."""
+    instances = _make_instances()
+
+    def factory(note_construction_prompt, evolution_prompt):
+        return FakeMemorySystem(
+            note_construction_prompt,
+            evolution_prompt,
+            answers_by_question={
+                "What does Alice love?": "hiking",
+                "What did Alice realize about hiking?": "not mentioned",
+            },
+        )
+
+    evaluate_candidate(
+        instances,
+        note_construction_prompt="construct: {content}",
+        evolution_prompt="evolve",
+        qa_prompt_template="Memories:\n{retrieved_memories}\n\nQ: {question}",
+        llm_model="unused",
+        memory_system_factory=factory,
+        n_bootstrap_resamples=100,
+    )
+
+    out = capsys.readouterr().out
+    assert "[trace:" not in out
+
+
+def test_trace_true_bypasses_prediction_cache(tmp_path):
+    """trace is a request to watch it happen live -- a cached prediction
+    from a prior non-traced run must not silently skip answer_question."""
+    instances = _make_instances()
+    call_count = {"n": 0}
+
+    def factory(note_construction_prompt, evolution_prompt):
+        system = FakeMemorySystem(
+            note_construction_prompt,
+            evolution_prompt,
+            answers_by_question={
+                "What does Alice love?": "hiking",
+                "What did Alice realize about hiking?": "not mentioned",
+            },
+        )
+        original = system._get_completion
+
+        def counting_get_completion(prompt, response_format=None, temperature=0.7):
+            call_count["n"] += 1
+            return original(prompt, response_format, temperature)
+
+        system.llm_controller.llm.get_completion = counting_get_completion
+        return system
+
+    common_kwargs = dict(
+        note_construction_prompt="construct: {content}",
+        evolution_prompt="evolve",
+        qa_prompt_template="Memories:\n{retrieved_memories}\n\nQ: {question}",
+        llm_model="unused",
+        memory_system_factory=factory,
+        run_label="test-trace",
+        split="test",
+        results_dir=tmp_path,
+    )
+
+    evaluate_candidate(instances, **common_kwargs)
+    calls_after_first_run = call_count["n"]
+    assert calls_after_first_run == 2  # both questions answered fresh
+
+    evaluate_candidate(instances, **common_kwargs, trace=True)
+    assert call_count["n"] == calls_after_first_run + 2, "trace run should re-answer both, not reuse the cache"
