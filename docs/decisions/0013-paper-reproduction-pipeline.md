@@ -105,6 +105,20 @@ this project has resolved.
   can swap prompt strings into at each candidate, not a flat script
   collection. What changes is what we call a "verified baseline" -- that's
   now `just reproduce`'s number, not `just baseline`'s.
+- **A second, easy-to-miss Ollama endpoint variable.** `RobustOllamaController`
+  (`memory_layer_robust.py`) calls the native `ollama` package's `chat()`
+  directly -- no `api_base`/host parameter is threaded through anywhere in
+  `RobustAgenticMemorySystem`/`RobustLLMController`/`RobustAdvancedMemAgent`
+  for the ollama backend specifically (checked all three; `api_base` is
+  accepted and used for their `sglang`/`vllm`/`openai` paths, silently
+  dropped for `ollama`). The `ollama` package resolves its endpoint from
+  the `OLLAMA_HOST` env var (default `http://127.0.0.1:11434`), read once
+  when its internal client singleton is first constructed. This is a
+  *different* variable from `OLLAMA_API_BASE` (used by the LiteLLM-routed
+  `just demo`/`just baseline` pipeline, docs/decisions/0003) -- added both
+  to `.env.example` with a note, since having two same-purpose,
+  differently-named variables for two pipelines is exactly the kind of
+  thing that causes a silent misconfiguration later.
 
 ## Consequences
 
