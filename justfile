@@ -19,6 +19,13 @@ demo config="configs/base.yaml" max_turns="15" max_questions="5":
 baseline config="configs/base.yaml":
     uv run python scripts/run_baseline.py --config {{config}}
 
+# Faithful, full-dataset reproduction of the paper's own benchmark
+# (docs/decisions/0013) -- uses WujiangXu/AgenticMemory's own code
+# (external/agentic-memory-repro/), not our approximation. This is the
+# number to compare against the paper's table, not `just baseline`.
+reproduce config="configs/base.yaml":
+    uv run python scripts/run_paper_reproduction.py --config {{config}}
+
 # Run a GEPA optimization job (costs real API calls — confirm budget first)
 gepa-optimize config="configs/base.yaml":
     uv run python scripts/run_gepa_optimize.py --config {{config}}

@@ -26,7 +26,11 @@ def test_load_config_missing_env_var_raises(tmp_path, monkeypatch):
 
 
 def test_load_config_real_base_yaml_shape(monkeypatch):
-    for var in ["AMEM_LLM_MODEL", "AMEM_EMBEDDING_MODEL", "OLLAMA_API_BASE", "GEPA_TASK_LM", "GEPA_REFLECTION_LM"]:
+    for var in [
+        "AMEM_LLM_MODEL", "AMEM_EMBEDDING_MODEL", "OLLAMA_API_BASE",
+        "GEPA_TASK_LM", "GEPA_REFLECTION_LM",
+        "PAPER_REPRO_BACKEND", "PAPER_REPRO_MODEL",
+    ]:
         monkeypatch.setenv(var, f"fake-{var}")
 
     config = load_config("configs/base.yaml")
@@ -34,3 +38,5 @@ def test_load_config_real_base_yaml_shape(monkeypatch):
     assert config["evaluation"]["split"] == "test"
     assert config["evaluation"]["retrieval_k"] == 10
     assert config["models"]["amem_llm_model"] == "fake-AMEM_LLM_MODEL"
+    assert config["models"]["paper_repro_model"] == "fake-PAPER_REPRO_MODEL"
+    assert config["paper_repro"]["retrieve_k"] == 10

@@ -14,6 +14,11 @@ models:
   # GEPA optimization roles (docs/decisions/0003).
   gepa_task_lm: ${GEPA_TASK_LM}
   gepa_reflection_lm: ${GEPA_REFLECTION_LM}
+  # Paper reproduction (docs/decisions/0013) -- separate from amem_llm_model
+  # above: WujiangXu/AgenticMemory's own backend/model naming, bare model
+  # name, not a LiteLLM-prefixed string.
+  paper_repro_backend: ${PAPER_REPRO_BACKEND}
+  paper_repro_model: ${PAPER_REPRO_MODEL}
 
 gepa:
   max_metric_calls: 150
@@ -29,3 +34,11 @@ evaluation:
   qa_prompt: src/amem_gepa/prompts/qa_answer.txt
   # Bootstrap CI resamples for the headline test-set metric (docs/decisions/0004).
   bootstrap_resamples: 10000
+
+# Paper reproduction (docs/decisions/0013, `just reproduce`) -- full 10-
+# conversation LoCoMo dataset, no train/val/test split (that split is only
+# for the later GEPA comparison phase, not part of the paper's own benchmark).
+paper_repro:
+  retrieve_k: 10  # their default; the paper's headline numbers used a per-model k-sweep
+  ratio: 1.0       # fraction of the 10 conversations to evaluate; 1.0 = all
+  temperature_c5: 0.5  # matches their --temperature_c5 default

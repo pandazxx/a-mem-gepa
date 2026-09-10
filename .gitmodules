@@ -1,3 +1,6 @@
 [submodule "external/a-mem"]
 	path = external/a-mem
 	url = https://github.com/agiresearch/A-mem.git
+[submodule "external/agentic-memory-repro"]
+	path = external/agentic-memory-repro
+	url = https://github.com/WujiangXu/AgenticMemory.git

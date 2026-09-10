@@ -11,10 +11,17 @@ are already decided there; don't re-litigate them without a new ADR.
 
 - `external/a-mem/` — `agiresearch/A-mem`, vendored as a git submodule. Treat
   as read-only upstream code; project logic goes in `src/amem_gepa/`, not here.
+  This is the general-purpose *library*, not the paper's reproduction code —
+  see `docs/decisions/0013` before assuming a number from it is comparable
+  to the paper's benchmark table.
+- `external/agentic-memory-repro/` — `WujiangXu/AgenticMemory`, vendored
+  read-only the same way. This *is* the paper's actual reproduction code
+  (see `docs/decisions/0013`); `just reproduce` is built on it.
 - `src/amem_gepa/` — adapter code: `amem_adapter.py` (wraps
   `AgenticMemorySystem`), `llm/litellm_controller.py` (routes A-MEM's own LLM
   calls through LiteLLM), `gepa_adapter.py` (`GEPAAdapter` implementation),
-  `metrics.py`, `datasets/` (LoCoMo loading + the train/val/test split).
+  `metrics.py`, `datasets/` (LoCoMo loading + the train/val/test split),
+  `paper_repro.py` (wraps `external/agentic-memory-repro/`, see 0013).
 - `src/amem_gepa/prompts/` — prompt candidates as plain text files, one per
   optimization target. The original A-MEM baseline prompts live here too,
   under a `baseline/` subfolder, verbatim — never edit those in place.
@@ -66,7 +73,7 @@ money and wall-clock time. Before starting one:
 - One branch per experiment or per meaningful pipeline change; land the
   corresponding `docs/experiments/NNN-*.md` (or ADR, for a scope change) in
   the same PR as the code that produced it.
-- The `external/a-mem` submodule pointer only moves on a deliberate bump —
-  call it out explicitly in the commit message, since it changes the system
-  under test.
+- The `external/a-mem`/`external/agentic-memory-repro` submodule pointers
+  only move on a deliberate bump — call it out explicitly in the commit
+  message, since it changes the system under test.
 - Don't commit anything under `results/` or a populated `.env`.
