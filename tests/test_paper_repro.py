@@ -24,6 +24,22 @@ def test_ensure_repro_repo_importable_adds_real_submodule_to_path():
     assert pr.REPRO_DIR.exists()
 
 
+def test_ensure_repro_repo_importable_gives_a_clear_error_when_uninitialized(tmp_path, monkeypatch):
+    """Real bug hit on a live run: an uninitialized git submodule leaves an
+    *empty* directory in place, not a missing one -- REPRO_DIR.exists()
+    alone would pass, and the failure would only surface much later as a
+    bare `ModuleNotFoundError: No module named 'test_advanced_robust'`
+    from deep inside the lazy import in run_full_reproduction()."""
+    import amem_gepa.paper_repro as pr
+
+    empty_dir = tmp_path / "external" / "agentic-memory-repro"
+    empty_dir.mkdir(parents=True)  # exists, but empty -- exactly an uninitialized submodule
+    monkeypatch.setattr(pr, "REPRO_DIR", empty_dir)
+
+    with pytest.raises(FileNotFoundError, match="git submodule update --init"):
+        pr.ensure_repro_repo_importable()
+
+
 def test_format_summary_uses_correct_category_labels():
     final_results = {
         "model": "llama3.2:1b",

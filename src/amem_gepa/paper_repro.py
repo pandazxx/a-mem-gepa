@@ -39,13 +39,24 @@ REPRO_DIR = Path(__file__).resolve().parent.parent.parent / "external" / "agenti
 def ensure_repro_repo_importable() -> None:
     """Puts external/agentic-memory-repro on sys.path so its sibling-import
     modules (memory_layer_robust, llm_text_parsers, load_dataset, utils,
-    test_advanced_robust) can be imported directly. Idempotent."""
-    repro_dir_str = str(REPRO_DIR)
-    if not REPRO_DIR.exists():
+    test_advanced_robust) can be imported directly. Idempotent.
+
+    Checks for a real file inside the directory, not just the directory's
+    own existence -- an uninitialized git submodule leaves an *empty*
+    directory in place (this project hit exactly this with external/a-mem
+    early on: `REPRO_DIR.exists()` is true either way, so that check alone
+    would pass and only fail later with a confusing bare ModuleNotFoundError
+    from deep inside the `from test_advanced_robust import ...` line).
+    """
+    marker_file = REPRO_DIR / "test_advanced_robust.py"
+    if not marker_file.exists():
         raise FileNotFoundError(
-            f"{REPRO_DIR} not found -- run `git submodule update --init` "
-            "(external/agentic-memory-repro is a git submodule, see docs/decisions/0013)"
+            f"{marker_file} not found -- external/agentic-memory-repro looks "
+            "uninitialized (an empty git submodule directory, not a missing "
+            "one, exists either way). Run `git submodule update --init --recursive` "
+            "(see docs/decisions/0013)."
         )
+    repro_dir_str = str(REPRO_DIR)
     if repro_dir_str not in sys.path:
         sys.path.insert(0, repro_dir_str)
 
