@@ -61,19 +61,6 @@ def ensure_repro_repo_importable() -> None:
         sys.path.insert(0, repro_dir_str)
 
 
-_NLTK_RESOURCE_PATHS = {
-    "punkt": "tokenizers/punkt",
-    "punkt_tab": "tokenizers/punkt_tab",
-    # Trailing slash required: wordnet ships zipped and unzips lazily, and
-    # nltk.data.find()'s own docs say a directory *inside* a zip is only
-    # matched when the resource name ends with "/" -- omitting it here
-    # reported wordnet as missing even right after downloading it,
-    # because find('corpora/wordnet') (no slash) doesn't match the
-    # zip-relative entry find('corpora/wordnet/') does.
-    "wordnet": "corpora/wordnet/",
-}
-
-
 def ensure_nltk_data() -> None:
     """Downloads the NLTK data external/agentic-memory-repro's own code
     actually needs at runtime, working around a version gap in their
@@ -84,51 +71,12 @@ def ensure_nltk_data() -> None:
     resource that word_tokenize() needs at call time -- their own
     pre-flight check doesn't catch this, so it surfaces later as a bare
     LookupError deep inside nltk's tokenizer, on the very first QA-answer
-    scoring call.
-
-    `nltk.download()` always hits the network first, regardless of
-    whether the resource is already present: `Downloader._update_index`
-    (nltk/downloader.py) re-fetches its package-index XML from the
-    internet every call (it's cached in-memory on the Downloader
-    singleton, not on disk, so nothing survives across process runs).
-    A truncated/interrupted fetch of that XML raises a bare
-    `xml.etree.ElementTree.ParseError` ("unclosed token") with no retry
-    -- hit for real on a live run over an unreliable connection. So:
-    check `nltk.data.find()` first to skip the network entirely once a
-    resource is actually present, and retry with backoff for the
-    transient failure when a real download is needed.
-    """
-    import time
-
+    scoring call. `nltk.download` is idempotent (a no-op if already
+    present), so calling this on every run is cheap."""
     import nltk
 
-    for resource, find_path in _NLTK_RESOURCE_PATHS.items():
-        try:
-            nltk.data.find(find_path)
-            continue
-        except LookupError:
-            pass
-
-        last_error: Exception | None = None
-        for attempt in range(3):
-            try:
-                nltk.download(resource, quiet=True)
-                break
-            except Exception as exc:  # noqa: BLE001 -- nltk's downloader raises whatever the transport/XML parser raised (ParseError, URLError, ...), not one stable type
-                last_error = exc
-                if attempt < 2:
-                    time.sleep(2**attempt)
-        else:
-            raise RuntimeError(
-                f"Failed to download NLTK resource '{resource}' after 3 attempts "
-                f"-- last error: {last_error!r}. This is nltk's own package-index "
-                "fetch (nltk/downloader.py Downloader._update_index), not "
-                "something in this project or the vendored submodule -- most "
-                "likely a transient network hiccup truncating the index.xml "
-                "download. Just rerun `just reproduce`; already-downloaded "
-                "resources are skipped via nltk.data.find(), so this only "
-                "re-downloads what's actually still missing."
-            ) from last_error
+    for resource in ("punkt", "punkt_tab", "wordnet"):
+        nltk.download(resource, quiet=True)
 
 
 def run_full_reproduction(
