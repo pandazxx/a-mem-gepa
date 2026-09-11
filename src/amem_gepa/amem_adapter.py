@@ -20,11 +20,86 @@ rather than trusting the paper's description of the code:
 
 from __future__ import annotations
 
+import json
 from typing import Optional
 
-from agentic_memory.memory_system import AgenticMemorySystem
+from agentic_memory.memory_system import AgenticMemorySystem, MemoryNote
 
 from amem_gepa.llm.litellm_controller import LiteLLMController, parse_json_response
+
+
+class _EvolutionGuardBackend:
+    """Wraps a LiteLLMBackend for the duration of one super().add_note()
+    call (docs/decisions/0012) to:
+
+    1. Validate the evolution decision before upstream applies it. Found by
+       tracing a real Llama 3.2:1b run: process_memory() has no guard
+       against a fabricated response -- it took a "strengthen" decision
+       whose suggested_connections were placeholder-shaped strings
+       (`memory_index_0`, ...) that matched no real memory, and
+       tags_to_update that echoed schema field names (`keywords_0`,
+       `memory_tags_0`, ...) rather than real tag words, and applied both
+       verbatim: note.links.extend(fake_ids) and note.tags = fake_tags,
+       silently overwriting the note's real tags with garbage. If none of
+       `suggested_connections` match a real memory id, the whole decision
+       is untrusted and forced to should_evolve=False before upstream ever
+       sees it. Always on -- this is a correctness fix, not a debugging
+       aid, so it applies to `just baseline` too.
+    2. Optionally print the (possibly corrected) decision (docs/decisions/0011).
+
+    Note-construction doesn't need this: analyze_content() already parses
+    its own response and can print/validate directly.
+    """
+
+    def __init__(self, inner, known_memory_ids, trace=False):
+        self._inner = inner
+        self._known_memory_ids = known_memory_ids
+        self._trace = trace
+
+    def get_completion(self, prompt, response_format=None, temperature=0.7):
+        response = self._inner.get_completion(prompt, response_format=response_format, temperature=temperature)
+        # A validation/tracing bug must never be the reason a call fails --
+        # upstream's own process_memory will separately print "Error in
+        # memory evolution" and recover if this response is unparseable;
+        # mirror that here, don't propagate.
+        try:
+            decision = parse_json_response(response)
+        except Exception:
+            decision = None
+
+        if isinstance(decision, dict) and decision.get("should_evolve"):
+            suggested = decision.get("suggested_connections") or []
+            if suggested and not any(conn in self._known_memory_ids for conn in suggested):
+                print(
+                    f"  [evolution guard] rejected: suggested_connections={suggested} "
+                    "match no real memory id -- treating the decision as fabricated, "
+                    "forcing should_evolve=False"
+                )
+                decision["should_evolve"] = False
+                decision["actions"] = []
+                response = json.dumps(decision)
+
+        if self._trace:
+            if isinstance(decision, dict) and "should_evolve" in decision:
+                print(
+                    f"  [trace:evolution] should_evolve={decision.get('should_evolve')} "
+                    f"actions={decision.get('actions')} "
+                    f"suggested_connections={decision.get('suggested_connections')} "
+                    f"tags_to_update={decision.get('tags_to_update')} "
+                    f"new_context_neighborhood={decision.get('new_context_neighborhood')} "
+                    f"new_tags_neighborhood={decision.get('new_tags_neighborhood')}"
+                )
+            else:
+                print(f"  [trace:evolution] unparseable response: {str(response)[:200]!r}")
+        return response
+
+
+# Same fields add_note() writes into ChromaDB metadata (memory_system.py) --
+# kept in sync manually, same reasoning as _NOTE_ANALYSIS_SCHEMA below.
+_NOTE_FIELDS = [
+    "id", "content", "keywords", "links", "retrieval_count", "timestamp",
+    "last_accessed", "context", "evolution_history", "category", "tags",
+]
 
 # Same response schema as upstream AgenticMemorySystem.analyze_content, kept
 # in sync manually -- see docs/decisions/0001 on why we don't subclass instead.
@@ -66,12 +141,26 @@ class PromptInjectableMemorySystem(AgenticMemorySystem):
         evolution_prompt: str,
         llm_model: str,
         llm_api_base: Optional[str] = None,
+        trace: bool = False,
         **kwargs,
     ):
+        # AgenticMemorySystem.__init__ unconditionally builds a real
+        # LLMController before we get a chance to override it below, and
+        # defaults to backend="openai" -- which raises ValueError if
+        # OPENAI_API_KEY isn't set, even though that controller is about to
+        # be discarded. Feed it a throwaway key so that construction doesn't
+        # crash; the OpenAI SDK client it builds just stores the string, it
+        # doesn't validate it until an actual request is made, and we never
+        # make one through it.
+        kwargs.setdefault("api_key", "unused-discarded-immediately-below")
         super().__init__(**kwargs)
         self.llm_controller = LiteLLMController(model=llm_model, api_base=llm_api_base)
         self._note_construction_prompt = note_construction_prompt
         self._evolution_system_prompt = evolution_prompt
+        # docs/decisions/0011 -- verbose per-call tracing, `just demo` only.
+        # `just baseline`/`just eval` never pass trace=True, so this is a
+        # no-op there.
+        self._trace = trace
 
     def analyze_content(self, content: str) -> dict:
         prompt = self._note_construction_prompt.format(content=content)
@@ -79,10 +168,27 @@ class PromptInjectableMemorySystem(AgenticMemorySystem):
             response = self.llm_controller.llm.get_completion(
                 prompt, response_format=_NOTE_ANALYSIS_SCHEMA
             )
-            return parse_json_response(response)
+            parsed = parse_json_response(response)
         except Exception as exc:  # matches upstream's own broad catch + fallback
             print(f"Error analyzing content: {exc}")
-            return {"keywords": [], "context": "General", "tags": []}
+            parsed = {}
+        # Smaller/weaker models (docs/decisions/0005) sometimes return JSON
+        # that parses fine but is missing a key entirely -- e.g. a truncated
+        # response that happens to close its braces early. A successful
+        # parse isn't the same as a complete one; fill in the same defaults
+        # upstream uses on an outright parse failure, per key, not just here.
+        result = {
+            "keywords": parsed.get("keywords") or [],
+            "context": parsed.get("context") or "General",
+            "tags": parsed.get("tags") or [],
+        }
+        if self._trace:
+            print(
+                f"  [trace:note_construction] content={content!r}\n"
+                f"  [trace:note_construction] -> keywords={result['keywords']} "
+                f"context={result['context']!r} tags={result['tags']}"
+            )
+        return result
 
     def add_note(self, content: str, time: str = None, **kwargs) -> str:
         if "keywords" not in kwargs:
@@ -90,4 +196,39 @@ class PromptInjectableMemorySystem(AgenticMemorySystem):
             kwargs.setdefault("keywords", analysis["keywords"])
             kwargs.setdefault("context", analysis["context"])
             kwargs.setdefault("tags", analysis["tags"])
-        return super().add_note(content, time=time, **kwargs)
+
+        # Evolution (process_memory) is upstream code we don't call
+        # ourselves -- add_note() triggers it internally. Swap in a guard
+        # backend just for this call so its LLM response gets validated
+        # (docs/decisions/0012, always) and optionally printed
+        # (docs/decisions/0011, only when self._trace), then restore the
+        # real one immediately after.
+        if not self.memories:
+            if self._trace:
+                print("  [trace:evolution] skipped (first memory, nothing to compare against)")
+            return super().add_note(content, time=time, **kwargs)
+        real_backend = self.llm_controller.llm
+        self.llm_controller.llm = _EvolutionGuardBackend(real_backend, set(self.memories.keys()), trace=self._trace)
+        try:
+            return super().add_note(content, time=time, **kwargs)
+        finally:
+            self.llm_controller.llm = real_backend
+
+    def snapshot_notes(self) -> list[dict]:
+        """JSON-serializable dump of every note built so far, for
+        checkpointing (checkpoint.py) -- a single conversation replay can
+        run for hours against a slow local model (docs/experiments), so
+        resuming needs to reload this state without re-calling the LLM."""
+        return [{field: getattr(note, field) for field in _NOTE_FIELDS} for note in self.memories.values()]
+
+    def restore_notes(self, notes: list[dict]) -> None:
+        """Inverse of snapshot_notes(): repopulates self.memories and the
+        ChromaDB retriever directly, bypassing add_note()/analyze_content()/
+        process_memory() entirely -- no LLM calls, since this data was
+        already produced by them in a prior (interrupted) run. Embeddings
+        are recomputed locally by ChromaDB on insert, which is cheap."""
+        for fields in notes:
+            note = MemoryNote(**fields)
+            self.memories[note.id] = note
+            metadata = {field: getattr(note, field) for field in _NOTE_FIELDS}
+            self.retriever.add_document(note.content, metadata, note.id)
