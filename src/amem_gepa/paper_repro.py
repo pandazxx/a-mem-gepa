@@ -61,6 +61,24 @@ def ensure_repro_repo_importable() -> None:
         sys.path.insert(0, repro_dir_str)
 
 
+def ensure_nltk_data() -> None:
+    """Downloads the NLTK data external/agentic-memory-repro's own code
+    actually needs at runtime, working around a version gap in their
+    (read-only, not ours to edit) download logic: both
+    test_advanced_robust.py and utils.py check for/download only 'punkt'
+    and 'wordnet', which was correct when they were written, but NLTK
+    3.8.2+ split punkt's tokenizer data into a separate 'punkt_tab'
+    resource that word_tokenize() needs at call time -- their own
+    pre-flight check doesn't catch this, so it surfaces later as a bare
+    LookupError deep inside nltk's tokenizer, on the very first QA-answer
+    scoring call. `nltk.download` is idempotent (a no-op if already
+    present), so calling this on every run is cheap."""
+    import nltk
+
+    for resource in ("punkt", "punkt_tab", "wordnet"):
+        nltk.download(resource, quiet=True)
+
+
 def run_full_reproduction(
     dataset_path: Path,
     backend: str,
@@ -77,6 +95,7 @@ def run_full_reproduction(
     evaluate.py's pipeline.
     """
     ensure_repro_repo_importable()
+    ensure_nltk_data()
 
     # Imported here, not at module level: importing test_advanced_robust
     # eagerly loads a SentenceTransformer model and does NLTK downloads at

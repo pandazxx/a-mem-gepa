@@ -11,7 +11,7 @@ import types
 
 import pytest
 
-from amem_gepa.paper_repro import ensure_repro_repo_importable, format_summary
+from amem_gepa.paper_repro import ensure_nltk_data, ensure_repro_repo_importable, format_summary
 
 
 def test_ensure_repro_repo_importable_adds_real_submodule_to_path():
@@ -38,6 +38,25 @@ def test_ensure_repro_repo_importable_gives_a_clear_error_when_uninitialized(tmp
 
     with pytest.raises(FileNotFoundError, match="git submodule update --init"):
         pr.ensure_repro_repo_importable()
+
+
+def test_ensure_nltk_data_downloads_punkt_tab():
+    """Real bug hit on a live run: external/agentic-memory-repro's own
+    pre-flight check (test_advanced_robust.py, utils.py) only downloads
+    'punkt'/'wordnet' -- correct when written, but NLTK 3.8.2+ split
+    punkt's tokenizer data into a separate 'punkt_tab' resource that
+    word_tokenize() needs at call time, so their check doesn't catch a
+    missing one and it surfaces later as a bare LookupError deep inside
+    nltk's tokenizer. This is real (not stubbed) nltk -- confirms the fix
+    actually resolves the LookupError, not just that download() was called."""
+    import nltk
+
+    ensure_nltk_data()
+
+    # Would raise LookupError before ensure_nltk_data() downloaded punkt_tab.
+    assert nltk.word_tokenize("This is a test sentence.") == [
+        "This", "is", "a", "test", "sentence", "."
+    ]
 
 
 def test_format_summary_uses_correct_category_labels():
