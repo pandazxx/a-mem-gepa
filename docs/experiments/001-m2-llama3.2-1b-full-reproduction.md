@@ -50,14 +50,43 @@ run.
 
 ## Comparison to the paper's reported Llama 3.2:1b row
 
-**Not filled in.** The paper's own benchmark table was shown earlier in this
-conversation as a pasted screenshot, not committed anywhere in this repo,
-and I don't have its exact per-category numbers memorized precisely enough
-to cite without risking a wrong transcription — especially given this
-project's explicit goal of a number that's directly comparable to the
-paper. Need the paper's Llama 3.2:1b F1/BLEU-1 row (multi_hop / temporal /
-open_domain / single_hop / adversarial / overall) re-shared to complete this
-section accurately.
+Paper's benchmark table (Llama 3.2, 1b, A-Mem row), converted from the
+paper's 0–100 scale to match ours ×100 below. The paper reports "Average
+Ranking" (F1/BLEU rank across LoCoMo/ReadAgent/MemoryBank/MemGPT/A-Mem for
+that model, not a combined score), not an overall F1/BLEU — so there is no
+paper "overall" cell to diff against; only the five per-category columns
+are directly comparable.
+
+| category    | ours F1 | paper F1 | Δ F1   | ours BLEU-1 | paper BLEU | Δ BLEU |
+|-------------|---------|----------|--------|-------------|------------|--------|
+| multi_hop   | 16.66   | 19.06    | -2.40  | 12.19       | 11.71      | +0.48  |
+| temporal    | 9.27    | 17.80    | -8.53  | 5.81        | 10.28      | -4.47  |
+| open_domain | 8.70    | 17.55    | -8.85  | 7.38        | 14.67      | -7.29  |
+| single_hop  | 24.83   | 28.51    | -3.68  | 18.82       | 24.13      | -5.31  |
+| adversarial | 35.24   | 58.81    | -23.57 | 28.48       | 54.28      | -25.80 |
+
+**This run underperforms the paper's reported A-Mem/Llama-3.2:1b numbers in
+every category** except multi_hop BLEU (+0.48, roughly a wash). The gap
+grows from mild (multi_hop, single_hop: -2 to -4 F1) to large (open_domain,
+temporal: -8 to -9 F1) to severe (adversarial: -23.6 F1 / -25.8 BLEU).
+
+Leading suspect, not yet confirmed: **this run used the vendored code's
+default `retrieve_k=10` for every category, but the paper's headline
+numbers come from a per-model `k`-sweep (`k ∈ {10,...,50}`,
+`run_k_sweep.sh`)** — deferred as a "cheap, do-later" follow-up in
+[decisions/0013](../decisions/0013-paper-reproduction-pipeline.md), on the
+assumption the gap would be small. This result suggests it isn't small,
+at least for the smallest model — worth promoting the k-sweep from
+deferred-follow-up to the next thing to actually run before treating this
+number as GEPA's baseline, since a GEPA-optimized prompt beating a
+baseline that's using a suboptimal `k` wouldn't isolate the prompt's
+actual effect.
+
+Other plausible (unranked, unconfirmed) contributors: single-run variance
+(no repeated-run averaging here, vs. unknown methodology in the paper),
+Ollama's specific `llama3.2:1b` quantization vs. whatever weights the
+paper actually ran, and the still-open adversarial-scoring-sign ambiguity
+(noted above) inflating or deflating that category's gap specifically.
 
 ## Cost
 
@@ -68,15 +97,23 @@ signal would need to come from Ollama's own logs, not ours).
 
 ## Conclusion
 
-Meets milestone 2's stated bar from
+Meets milestone 2's *mechanical* bar from
 [00-proposal.md](../00-proposal.md#milestones): a genuine, end-to-end,
-full-dataset reproduction using the paper's own code and scoring, on one
-model (Llama 3.2:1b) to bound cost/time. This is now the verified baseline
-GEPA (milestone 3) prompt candidates get compared against — not
-`just baseline`'s number.
+full-dataset run using the paper's own code and scoring, on one model
+(Llama 3.2:1b) to bound cost/time — no more environment errors, `just
+reproduce` runs clean start to finish.
 
-Still open: the paper-row comparison above, and the two milestone-3
-questions flagged in decisions/0013 (does GEPA optimize 2 prompts via the
-library pipeline, or 4 via this reproduction's note-construction + 3-step
-evolution flow; and whether to run the paper's `k`-sweep for a headline
-number vs. this run's fixed `k=10`).
+Does **not** yet meet the bar of "verified baseline to compare GEPA
+against": this run is meaningfully below the paper's own reported
+Llama-3.2:1b/A-Mem numbers in every category but one (see comparison
+above), and the leading suspect (fixed `k=10` vs. the paper's per-model
+`k`-sweep for its headline numbers) is unconfirmed. Using this number as
+GEPA's baseline as-is risks attributing a `k`-selection gap to prompt
+quality. Next step before milestone 3: run the `k`-sweep
+(`run_k_sweep.sh`-equivalent) for `llama3.2:1b` and see how much of this
+gap it closes.
+
+Still open after that: the two milestone-3 questions flagged in
+decisions/0013 (does GEPA optimize 2 prompts via the library pipeline, or
+4 via this reproduction's note-construction + 3-step evolution flow), and
+the adversarial-scoring-sign ambiguity.
