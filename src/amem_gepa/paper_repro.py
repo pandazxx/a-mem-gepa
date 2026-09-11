@@ -26,6 +26,7 @@ per CLAUDE.md).
 
 from __future__ import annotations
 
+import json
 import logging
 import pickle
 import sys
@@ -34,6 +35,9 @@ from datetime import datetime
 from pathlib import Path
 
 REPRO_DIR = Path(__file__).resolve().parent.parent.parent / "external" / "agentic-memory-repro"
+
+# Matches external/agentic-memory-repro/run_k_sweep.sh's own K_VALUES.
+K_SWEEP_VALUES = (10, 15, 20, 25, 30, 35, 40, 45, 50)
 
 
 def ensure_repro_repo_importable() -> None:
@@ -211,6 +215,94 @@ def run_full_reproduction(
         "individual_results": results,
     }
     return final_results
+
+
+def run_k_sweep(
+    dataset_path: Path,
+    backend: str,
+    model: str,
+    k_values: tuple[int, ...] = K_SWEEP_VALUES,
+    ratio: float = 1.0,
+    temperature_c5: float = 0.5,
+    results_dir: Path = Path("results/paper_repro"),
+) -> dict[int, dict]:
+    """Finds the best `retrieve_k` for a fixed backend/model, per
+    docs/experiments/001's finding that this project's fixed retrieve_k=10
+    likely underestimates the paper's own headline numbers -- the paper's
+    own run_k_sweep.sh sweeps k in exactly this range.
+
+    Cheap relative to a from-scratch run, NOT free: `run_full_reproduction`
+    caches memories under `results_dir/cached_memories_{backend}_{model}/`
+    keyed on backend/model only, not retrieve_k (confirmed by reading
+    test_advanced_robust.py:evaluate_dataset, which their own
+    run_k_sweep.sh relies on the same way) -- so every k here after the
+    first reuses those memories rather than rebuilding them. What's NOT
+    skipped is QA-answering: each k still re-answers all `n` questions (2
+    LLM calls per question -- keyword generation, then the answer), so
+    this is `len(k_values)`x the QA-answering cost of one `run_full_reproduction`
+    call, not free.
+
+    Resumable per-k: a k whose output file under `results_dir/k_sweep/`
+    already exists is loaded from disk instead of re-running its
+    QA-answering pass.
+    """
+    sweep_dir = results_dir / "k_sweep"
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+    eval_logger = logging.getLogger("amem_gepa.paper_repro")
+
+    results_by_k: dict[int, dict] = {}
+    for k in k_values:
+        out_file = sweep_dir / f"results_k{k}.json"
+        if out_file.exists():
+            eval_logger.info(f"[k-sweep] k={k} already computed -- loading {out_file}")
+            results_by_k[k] = json.loads(out_file.read_text())
+            continue
+
+        eval_logger.info(f"[k-sweep] running retrieve_k={k}")
+        result = run_full_reproduction(
+            dataset_path=dataset_path,
+            backend=backend,
+            model=model,
+            retrieve_k=k,
+            ratio=ratio,
+            temperature_c5=temperature_c5,
+            results_dir=results_dir,
+        )
+        out_file.write_text(json.dumps(result, indent=2))
+        results_by_k[k] = result
+
+    return results_by_k
+
+
+def format_k_sweep_summary(results_by_k: dict[int, dict]) -> str:
+    """Overall F1/BLEU-1 per k (mirrors run_k_sweep.sh's own summary
+    block), plus the per-category breakdown at the best overall-F1 k --
+    docs/experiments/001 found the paper gap concentrated in specific
+    categories (temporal/open_domain/adversarial), not spread evenly, so
+    the best *overall* k could still look worse on any one category."""
+    from amem_gepa.datasets.locomo import CATEGORY_LABELS
+
+    ks = sorted(results_by_k)
+    best_k = max(ks, key=lambda k: results_by_k[k]["aggregate_metrics"]["overall"]["f1"]["mean"])
+
+    lines = [f"{'k':>4} {'overall F1':>10} {'overall BLEU-1':>14}", "-" * 32]
+    for k in ks:
+        overall = results_by_k[k]["aggregate_metrics"]["overall"]
+        marker = "  <-- best overall F1" if k == best_k else ""
+        lines.append(f"{k:>4} {overall['f1']['mean']:>10.4f} {overall['bleu1']['mean']:>14.4f}{marker}")
+
+    lines.append("")
+    lines.append(f"Per-category at best overall-F1 k={best_k}:")
+    metrics = results_by_k[best_k]["aggregate_metrics"]
+    for cat in sorted(int(c) for c in results_by_k[best_k]["category_distribution"]):
+        stats = metrics.get(f"category_{cat}", {})
+        f1 = stats.get("f1", {}).get("mean")
+        bleu1 = stats.get("bleu1", {}).get("mean")
+        n = stats.get("f1", {}).get("count", 0)
+        label = CATEGORY_LABELS.get(cat, f"category_{cat}")
+        lines.append(f"  {label:14s} F1={f1:.4f} BLEU-1={bleu1:.4f} n={n}")
+
+    return "\n".join(lines)
 
 
 def format_summary(final_results: dict) -> str:

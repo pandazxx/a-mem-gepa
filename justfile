@@ -26,6 +26,14 @@ baseline config="configs/base.yaml":
 reproduce config="configs/base.yaml":
     uv run python scripts/run_paper_reproduction.py --config {{config}}
 
+# K-sweep for the paper-reproduction pipeline (docs/decisions/0013,
+# docs/experiments/001) -- finds the best retrieve_k for a fixed
+# backend/model, reusing memories cached by `just reproduce`. NOT free:
+# re-runs QA-answering at every k (see scripts/run_k_sweep.py's module
+# docstring for the cost breakdown) -- confirm budget before running.
+k-sweep config="configs/base.yaml":
+    uv run python scripts/run_k_sweep.py --config {{config}}
+
 # Run a GEPA optimization job (costs real API calls — confirm budget first)
 gepa-optimize config="configs/base.yaml":
     uv run python scripts/run_gepa_optimize.py --config {{config}}

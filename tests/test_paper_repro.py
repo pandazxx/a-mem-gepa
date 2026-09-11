@@ -6,6 +6,7 @@ pull in torch/sentence-transformers/bert-score, too heavy for this suite
 (same reasoning as test_amem_adapter.py's agentic_memory stub).
 """
 
+import json
 import sys
 import types
 
@@ -268,3 +269,94 @@ def test_run_full_reproduction_respects_ratio(fake_repro_modules):
 
     # ratio=0.5 of 2 conversations -> just conv-a's 2 questions
     assert results["total_questions"] == 2
+
+
+def test_run_k_sweep_reuses_cached_memories_across_k_values(fake_repro_modules):
+    from amem_gepa.paper_repro import run_k_sweep
+
+    results_dir = fake_repro_modules / "results"
+    results_by_k = run_k_sweep(
+        dataset_path=fake_repro_modules / "fake.json",
+        backend="ollama",
+        model="llama3.2:1b",
+        k_values=(10, 20, 30),
+        results_dir=results_dir,
+    )
+
+    assert set(results_by_k) == {10, 20, 30}
+    for result in results_by_k.values():
+        assert result["total_questions"] == 3
+
+    # 2 conversations for k=10 (memory-building), then cache hits for the
+    # other two k values -- no further add_memory() calls for any of them.
+    assert len(_FakeAgent.instances) == 6, "one agent per conversation per k"
+    building_agents, cached_agents = _FakeAgent.instances[:2], _FakeAgent.instances[2:]
+    assert all(agent.added for agent in building_agents)
+    assert all(agent.added == [] for agent in cached_agents), "later k values must reuse cached memories"
+
+
+def test_run_k_sweep_writes_one_result_file_per_k(fake_repro_modules):
+    from amem_gepa.paper_repro import run_k_sweep
+
+    results_dir = fake_repro_modules / "results"
+    run_k_sweep(
+        dataset_path=fake_repro_modules / "fake.json",
+        backend="ollama",
+        model="llama3.2:1b",
+        k_values=(10, 20),
+        results_dir=results_dir,
+    )
+
+    assert (results_dir / "k_sweep" / "results_k10.json").exists()
+    assert (results_dir / "k_sweep" / "results_k20.json").exists()
+
+
+def test_run_k_sweep_resumes_from_an_existing_k_output_file(fake_repro_modules):
+    from amem_gepa.paper_repro import run_k_sweep
+
+    results_dir = fake_repro_modules / "results"
+    sweep_dir = results_dir / "k_sweep"
+    sweep_dir.mkdir(parents=True)
+    sentinel = {"total_questions": 999, "aggregate_metrics": {"overall": {"f1": {"mean": 0.42}}}}
+    (sweep_dir / "results_k99.json").write_text(json.dumps(sentinel))
+
+    results_by_k = run_k_sweep(
+        dataset_path=fake_repro_modules / "fake.json",
+        backend="ollama",
+        model="llama3.2:1b",
+        k_values=(99,),
+        results_dir=results_dir,
+    )
+
+    assert results_by_k[99] == sentinel
+    assert _FakeAgent.instances == [], "a resumed k must not re-run QA-answering at all"
+
+
+def test_format_k_sweep_summary_picks_best_overall_f1_and_breaks_down_by_category():
+    from amem_gepa.paper_repro import format_k_sweep_summary
+
+    results_by_k = {
+        10: {
+            "category_distribution": {"1": 1},
+            "aggregate_metrics": {
+                "overall": {"f1": {"mean": 0.20}, "bleu1": {"mean": 0.10}},
+                "category_1": {"f1": {"mean": 0.20, "count": 1}, "bleu1": {"mean": 0.10}},
+            },
+        },
+        20: {
+            "category_distribution": {"1": 1},
+            "aggregate_metrics": {
+                "overall": {"f1": {"mean": 0.35}, "bleu1": {"mean": 0.30}},
+                "category_1": {"f1": {"mean": 0.35, "count": 1}, "bleu1": {"mean": 0.30}},
+            },
+        },
+    }
+
+    out = format_k_sweep_summary(results_by_k)
+
+    assert "best_k=" not in out  # not a literal token -- just guards against a leftover debug format
+    assert "best overall F1" in out
+    lines = out.splitlines()
+    best_line = next(line for line in lines if "best overall F1" in line)
+    assert best_line.strip().startswith("20"), "k=20 has the higher overall F1 and should be marked best"
+    assert "multi_hop" in out
