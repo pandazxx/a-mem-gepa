@@ -87,10 +87,33 @@ this project has resolved.
   code.
 - `scripts/run_paper_reproduction.py` (`just reproduce`) runs the full
   10-conversation dataset by default, `retrieve_k=10` (their own default).
-  The paper's headline numbers used a per-model k-sweep
-  (`k ∈ {10,...,50}`, `run_k_sweep.sh`) -- deferred as a follow-up (their
-  sweep only re-runs the cheap QA-answering step against cached memories,
-  not memory-building, so it's a cheap addition later, not a blocker now).
+  **Correction (2026-09-12), read directly from the paper
+  (arxiv.org/pdf/2502.12110, Appendix A.5, Table 8 -- previously only
+  known secondhand): the paper's headline numbers do NOT use one swept
+  `k` per model.** They use `k=10` everywhere *except* for specific
+  (model, category) pairs that didn't already hit SOTA at `k=10`, tuned
+  individually via the Figure 3 sweep (`k in {10,15,...,50}`,
+  `run_k_sweep.sh`):
+  | Model          | Multi Hop | Temporal | Open Domain | Single Hop | Adversarial |
+  |----------------|-----------|----------|-------------|------------|-------------|
+  | GPT-4o-mini    | 40        | 40       | 50          | 50         | 40          |
+  | GPT-4o         | 40        | 40       | 50          | 50         | 40          |
+  | Qwen2.5-1.5b   | 10        | 10       | 10          | 10         | 10          |
+  | Qwen2.5-3b     | 10        | 10       | 50          | 10         | 10          |
+  | Llama-3.2-1b   | 10        | 10       | 10          | 10         | 10          |
+  | Llama-3.2-3b   | 10        | 20       | 10          | 10         | 10          |
+  Llama-3.2-1b (this project's M2 model, docs/decisions/0005) used `k=10`
+  for every category -- identical to what `just reproduce` already runs,
+  so the fixed-`k=10`-vs-paper's-sweep hypothesis in
+  docs/experiments/001 is **retracted** for that model; see that doc's
+  2026-09-12 correction. The sweep only matters for GPT-4o-mini/GPT-4o
+  (and, less so, Qwen2.5-3b/Llama-3.2-3b's one tuned category each) --
+  `just k-sweep` is still useful there, just not for explaining the
+  Llama-3.2-1b gap. Note the table above is a *per-category* choice
+  within one model/run, not "pick the model's single best k" -- something
+  `run_k_sweep`'s current one-global-k-per-run design can't reconstruct
+  directly; splicing per-category results from the right k-run would be
+  needed to build the exact paper-matching number, not done yet.
 - Model/backend config is separate from the main pipeline's
   (`PAPER_REPRO_BACKEND`/`PAPER_REPRO_MODEL` env vars, `bare model name`,
   not LiteLLM-prefixed) since this reproduction uses their own

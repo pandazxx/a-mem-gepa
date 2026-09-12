@@ -226,10 +226,24 @@ def run_k_sweep(
     temperature_c5: float = 0.5,
     results_dir: Path = Path("results/paper_repro"),
 ) -> dict[int, dict]:
-    """Finds the best `retrieve_k` for a fixed backend/model, per
-    docs/experiments/001's finding that this project's fixed retrieve_k=10
-    likely underestimates the paper's own headline numbers -- the paper's
-    own run_k_sweep.sh sweeps k in exactly this range.
+    """Finds the best single, uniform `retrieve_k` for a fixed backend/model,
+    sweeping the same range as the paper's own run_k_sweep.sh.
+
+    Correction (2026-09-12), read directly from the paper (Appendix A.5,
+    Table 8, see docs/decisions/0013): the paper's headline numbers do NOT
+    use one swept k per model applied uniformly -- most models (including
+    Llama-3.2-1b, this project's M2 model) use k=10 for every category,
+    period. Only GPT-4o-mini/GPT-4o (k=40 for Multi Hop/Temporal/
+    Adversarial, k=50 for Open Domain/Single Hop) and, to a lesser degree,
+    Qwen2.5-3b/Llama-3.2-3b (one category each) get tuned away from k=10,
+    and even then it's a *per-category* choice within one run, not "pick
+    this model's single best global k". This function's one-k-for-the-
+    whole-dataset design can find the best *uniform* k, which is a
+    reasonable thing to know, but can't reconstruct the paper's actual
+    per-category-spliced number by itself -- for that, run this at k=40
+    and k=50 specifically (cheaper than the full sweep) and take Multi
+    Hop/Temporal/Adversarial from the k=40 result, Open Domain/Single Hop
+    from k=50.
 
     Cheap relative to a from-scratch run, NOT free: `run_full_reproduction`
     caches memories under `results_dir/cached_memories_{backend}_{model}/`

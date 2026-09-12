@@ -14,6 +14,15 @@ of a single `just reproduce` run. Confirm this is worth it for your
 backend/model before running for real (CLAUDE.md's cost-awareness
 convention) -- resumable per-k under results/paper_repro/k_sweep/ if
 interrupted partway.
+
+Which k actually matters (read directly from the paper, Appendix A.5
+Table 8, docs/decisions/0013): most models use k=10 for every category in
+the paper's own headline numbers -- including Llama-3.2-1b, this
+project's M2 model, so a sweep isn't expected to move that number. Only
+GPT-4o-mini/GPT-4o are swept away from k=10 (k=40 for Multi Hop/Temporal/
+Adversarial, k=50 for Open Domain/Single Hop). For those two models, the
+cheapest way to reconstruct the paper's actual per-category number is
+`--k-values 40,50` (2 values), not the full default sweep.
 """
 
 from __future__ import annotations

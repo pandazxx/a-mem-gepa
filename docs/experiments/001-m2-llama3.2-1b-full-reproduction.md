@@ -70,23 +70,39 @@ every category** except multi_hop BLEU (+0.48, roughly a wash). The gap
 grows from mild (multi_hop, single_hop: -2 to -4 F1) to large (open_domain,
 temporal: -8 to -9 F1) to severe (adversarial: -23.6 F1 / -25.8 BLEU).
 
-Leading suspect, not yet confirmed: **this run used the vendored code's
-default `retrieve_k=10` for every category, but the paper's headline
-numbers come from a per-model `k`-sweep (`k ∈ {10,...,50}`,
-`run_k_sweep.sh`)** — deferred as a "cheap, do-later" follow-up in
-[decisions/0013](../decisions/0013-paper-reproduction-pipeline.md), on the
-assumption the gap would be small. This result suggests it isn't small,
-at least for the smallest model — worth promoting the k-sweep from
-deferred-follow-up to the next thing to actually run before treating this
-number as GEPA's baseline, since a GEPA-optimized prompt beating a
-baseline that's using a suboptimal `k` wouldn't isolate the prompt's
-actual effect.
+**Correction (2026-09-12): the `k`-sweep hypothesis below is disproven for
+this specific model.** Read the paper directly (arxiv.org/pdf/2502.12110,
+Appendix A.5, Table 8 — "Selection of k values in retriever across
+specific categories and model choices"): **Llama-3.2-1b's own headline row
+used `k=10` for all five categories**, identical to what this run used.
+The per-category `k`-tuning in that table only kicks in for models that
+*didn't* hit SOTA at `k=10` — the appendix says so explicitly ("For models
+that have already achieved SOTA performance with k=10, we maintain this
+value without further tuning"), and Llama-3.2-1b is one of those models
+(along with Qwen2.5-1.5b; Qwen2.5-3b and Llama-3.2-3b get one category
+each tuned). GPT-4o-mini and GPT-4o are the two models that actually get
+swept away from `k=10` (to 40/50, see Table 8) — this run isn't one of
+those.
 
-Other plausible (unranked, unconfirmed) contributors: single-run variance
-(no repeated-run averaging here, vs. unknown methodology in the paper),
-Ollama's specific `llama3.2:1b` quantization vs. whatever weights the
-paper actually ran, and the still-open adversarial-scoring-sign ambiguity
-(noted above) inflating or deflating that category's gap specifically.
+~~Leading suspect, not yet confirmed: this run used the vendored code's
+default `retrieve_k=10` for every category, but the paper's headline
+numbers come from a per-model `k`-sweep — deferred as a "cheap, do-later"
+follow-up in decisions/0013.~~ **Retracted per the correction above** — the
+gap for *this* model isn't a `k`-selection artifact. `src/amem_gepa/paper_repro.py`'s
+`run_k_sweep`/`format_k_sweep_summary` docstrings and `docs/decisions/0013`
+still describe the now-retracted hypothesis; not fixing those prose
+references separately since the practical takeaway (the sweep tooling
+itself is still correct and still useful for GPT-4o-mini, just not for
+explaining *this* row's gap) is captured here.
+
+Other plausible (unranked, unconfirmed) contributors, still open: single-run
+variance (no repeated-run averaging here, vs. unknown methodology in the
+paper), Ollama's specific `llama3.2:1b` quantization vs. whatever weights
+the paper actually ran, and the still-open adversarial-scoring-sign
+ambiguity (noted above) inflating or deflating that category's gap
+specifically — the adversarial gap is also the single largest one, which
+fits a scoring-methodology difference at least as well as anything else on
+this list.
 
 ## Cost
 
@@ -106,14 +122,18 @@ reproduce` runs clean start to finish.
 Does **not** yet meet the bar of "verified baseline to compare GEPA
 against": this run is meaningfully below the paper's own reported
 Llama-3.2:1b/A-Mem numbers in every category but one (see comparison
-above), and the leading suspect (fixed `k=10` vs. the paper's per-model
-`k`-sweep for its headline numbers) is unconfirmed. Using this number as
-GEPA's baseline as-is risks attributing a `k`-selection gap to prompt
-quality. Next step before milestone 3: run the `k`-sweep
-(`run_k_sweep.sh`-equivalent) for `llama3.2:1b` and see how much of this
-gap it closes.
+above), and — per the 2026-09-12 correction above — it is **not** a
+`k`-selection artifact, since the paper used the same `k=10` for this
+model. The real cause is still unidentified. Running the `k`-sweep for
+`llama3.2:1b` (as originally planned here) would mostly just confirm this:
+expect it to show little-to-no improvement, since the paper's own
+methodology didn't find one either. Not worth spending the time/API
+budget on for *this* model — the sweep is still worth running for
+GPT-4o-mini specifically, where Table 8 says `k=40`/`k=50` (not `k=10`)
+is actually what the paper's headline row used.
 
-Still open after that: the two milestone-3 questions flagged in
-decisions/0013 (does GEPA optimize 2 prompts via the library pipeline, or
-4 via this reproduction's note-construction + 3-step evolution flow), and
-the adversarial-scoring-sign ambiguity.
+Still open: the two milestone-3 questions flagged in decisions/0013 (does
+GEPA optimize 2 prompts via the library pipeline, or 4 via this
+reproduction's note-construction + 3-step evolution flow), the
+adversarial-scoring-sign ambiguity, and now also: what actually explains
+the Llama-3.2:1b gap, if not `k`.
