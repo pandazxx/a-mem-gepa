@@ -23,6 +23,10 @@ dependencies = [
   "bert-score>=0.3.13",
   "pandas>=2.0.0",
   "tqdm>=4.66.0",
+  # Only reachable via PAPER_REPRO_BACKEND=openai (e.g. routed through
+  # OpenRouter -- see .env.example, docs/decisions/0013). Not pulled in by
+  # backend=ollama, so needs to be listed explicitly.
+  "openai>=1.0.0",
 ]
 
 [project.optional-dependencies]

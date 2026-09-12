@@ -108,17 +108,36 @@ this project has resolved.
 - **A second, easy-to-miss Ollama endpoint variable.** `RobustOllamaController`
   (`memory_layer_robust.py`) calls the native `ollama` package's `chat()`
   directly -- no `api_base`/host parameter is threaded through anywhere in
-  `RobustAgenticMemorySystem`/`RobustLLMController`/`RobustAdvancedMemAgent`
-  for the ollama backend specifically (checked all three; `api_base` is
-  accepted and used for their `sglang`/`vllm`/`openai` paths, silently
-  dropped for `ollama`). The `ollama` package resolves its endpoint from
-  the `OLLAMA_HOST` env var (default `http://127.0.0.1:11434`), read once
-  when its internal client singleton is first constructed. This is a
-  *different* variable from `OLLAMA_API_BASE` (used by the LiteLLM-routed
-  `just demo`/`just baseline` pipeline, docs/decisions/0003) -- added both
-  to `.env.example` with a note, since having two same-purpose,
-  differently-named variables for two pipelines is exactly the kind of
-  thing that causes a silent misconfiguration later.
+  `RobustAgenticMemorySystem`/`RobustLLMController`/`RobustAdvancedMemAgent`.
+  **Correction, verified by re-reading `RobustLLMController.__init__` and
+  every call site in this project's own `paper_repro.py`: `api_base` isn't
+  threaded through for *any* of the four backends, not just `ollama` as
+  originally written here** -- `RobustLLMController`'s factory accepts an
+  `api_base` parameter but never actually passes it to any of the
+  `openai`/`ollama`/`sglang`/`vllm` controller constructors it builds, and
+  nothing on our side passes one either. The `ollama` package resolves its
+  endpoint from the `OLLAMA_HOST` env var (default `http://127.0.0.1:11434`),
+  read once when its internal client singleton is first constructed. This
+  is a *different* variable from `OLLAMA_API_BASE` (used by the
+  LiteLLM-routed `just demo`/`just baseline` pipeline, docs/decisions/0003)
+  -- added both to `.env.example` with a note, since having two
+  same-purpose, differently-named variables for two pipelines is exactly
+  the kind of thing that causes a silent misconfiguration later.
+- **Routing the `openai` backend through OpenRouter (or any other
+  OpenAI-API-compatible endpoint).** `RobustOpenAIController` just does
+  `OpenAI(api_key=api_key)` (`memory_layer_robust.py`) -- no `base_url`
+  passed, consistent with the `api_base`-is-never-threaded-through
+  correction above. The `openai` Python SDK itself, however, falls back to
+  the `OPENAI_BASE_URL` env var when `base_url` isn't passed explicitly
+  (verified directly against the installed SDK: `OpenAI(api_key=...)`
+  with `OPENAI_BASE_URL` set in the environment produces a client whose
+  `.base_url` is that value) -- so `PAPER_REPRO_BACKEND=openai` +
+  `OPENAI_API_KEY=<your OpenRouter key>` + `OPENAI_BASE_URL=https://openrouter.ai/api/v1`
+  + `PAPER_REPRO_MODEL=openai/gpt-4o-mini` (OpenRouter's own model-slug
+  naming) routes through OpenRouter with zero code changes, no submodule
+  edit required. Added to `.env.example`; also added `openai` to
+  `pyproject.toml` (not previously a direct dependency -- only reachable
+  via `backend="ollama"` until now).
 
 ## Consequences
 
