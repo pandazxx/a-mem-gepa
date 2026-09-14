@@ -83,6 +83,37 @@ def ensure_nltk_data() -> None:
         nltk.download(resource, quiet=True)
 
 
+def _qa_progress_path(results_dir: Path, backend: str, model: str, retrieve_k: int) -> Path:
+    """Per-(backend, model, retrieve_k) log of already-answered questions,
+    used to resume a run_full_reproduction call interrupted mid
+    QA-answering. Unlike memory-building (cached per-conversation, keyed
+    on backend/model only), the QA-answering loop had zero intra-run
+    checkpointing until this was added -- a kill partway through
+    re-answered every question from scratch on rerun, wasting real spend
+    against a paid backend (hit for real running GPT-4o-mini via
+    OpenRouter). Filename follows the same cached_memories_{backend}_{model}
+    convention -- a `/` in `model` (e.g. "openai/gpt-4o-mini") produces a
+    nested directory via pathlib the same way it already does there."""
+    return results_dir / f"qa_progress_{backend}_{model}_k{retrieve_k}.jsonl"
+
+
+def _load_qa_progress(path: Path) -> dict[tuple[int, int], dict]:
+    if not path.exists():
+        return {}
+    progress: dict[tuple[int, int], dict] = {}
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        progress[(record["sample_id"], record["q_idx"])] = record
+    return progress
+
+
+def _append_qa_progress(path: Path, record: dict) -> None:
+    with open(path, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
 def run_full_reproduction(
     dataset_path: Path,
     backend: str,
@@ -97,6 +128,11 @@ def run_full_reproduction(
     submodule's own directory. See module docstring for what's reused
     unmodified (everything except file paths) vs. what's different from
     evaluate.py's pipeline.
+
+    QA-answering is resumable per-question via `_qa_progress_path` --
+    added after a real GPT-4o-mini/OpenRouter run got killed partway
+    through and lost everything, since only memory-building had any
+    checkpointing before this.
     """
     ensure_repro_repo_importable()
     ensure_nltk_data()
@@ -130,6 +166,13 @@ def run_full_reproduction(
     memories_dir = results_dir / f"cached_memories_{backend}_{model}"
     memories_dir.mkdir(parents=True, exist_ok=True)
     allow_categories = [1, 2, 3, 4, 5]
+
+    progress_path = _qa_progress_path(results_dir, backend, model, retrieve_k)
+    qa_progress = _load_qa_progress(progress_path)
+    if qa_progress:
+        eval_logger.info(
+            f"Resuming QA-answering at k={retrieve_k}: {len(qa_progress)} questions already answered"
+        )
 
     for sample_idx, sample in enumerate(samples):
         # RobustAdvancedMemAgent's own signature: (model, backend, retrieve_k,
@@ -168,36 +211,46 @@ def run_full_reproduction(
             agent.memory_system.retriever.save(str(retriever_cache_file), str(retriever_cache_embeddings_file))
             eval_logger.info(f"[{sample_idx}] cached {len(agent.memory_system.memories)} memories")
 
-        for qa in sample.qa:
+        for q_idx, qa in enumerate(sample.qa):
             if int(qa.category) not in allow_categories:
                 continue
             total_questions += 1
             category_counts[qa.category] += 1
 
-            prediction, user_prompt, raw_context = agent.answer_question(qa.question, qa.category, qa.final_answer)
-            prediction = parse_plain_text_answer(prediction)
+            cached = qa_progress.get((sample_idx, q_idx))
+            if cached is not None:
+                prediction = cached["prediction"]
+                metrics = cached["metrics"]
+            else:
+                prediction, user_prompt, raw_context = agent.answer_question(
+                    qa.question, qa.category, qa.final_answer
+                )
+                prediction = parse_plain_text_answer(prediction)
 
-            metrics = (
-                calculate_metrics(prediction, qa.final_answer)
-                if qa.final_answer
-                else {
-                    "exact_match": 0, "f1": 0.0, "rouge1_f": 0.0, "rouge2_f": 0.0,
-                    "rougeL_f": 0.0, "bleu1": 0.0, "bleu2": 0.0, "bleu3": 0.0,
-                    "bleu4": 0.0, "bert_f1": 0.0, "meteor": 0.0, "sbert_similarity": 0.0,
-                }
-            )
+                metrics = (
+                    calculate_metrics(prediction, qa.final_answer)
+                    if qa.final_answer
+                    else {
+                        "exact_match": 0, "f1": 0.0, "rouge1_f": 0.0, "rouge2_f": 0.0,
+                        "rougeL_f": 0.0, "bleu1": 0.0, "bleu2": 0.0, "bleu3": 0.0,
+                        "bleu4": 0.0, "bert_f1": 0.0, "meteor": 0.0, "sbert_similarity": 0.0,
+                    }
+                )
+
             all_metrics.append(metrics)
             all_categories.append(qa.category)
-            results.append(
-                {
-                    "sample_id": sample_idx,
-                    "question": qa.question,
-                    "prediction": prediction,
-                    "reference": qa.final_answer,
-                    "category": qa.category,
-                    "metrics": metrics,
-                }
-            )
+            record = {
+                "sample_id": sample_idx,
+                "q_idx": q_idx,
+                "question": qa.question,
+                "prediction": prediction,
+                "reference": qa.final_answer,
+                "category": qa.category,
+                "metrics": metrics,
+            }
+            results.append(record)
+            if cached is None:
+                _append_qa_progress(progress_path, record)
             if total_questions % 25 == 0:
                 eval_logger.info(f"Processed {total_questions} questions")
 
@@ -256,9 +309,12 @@ def run_k_sweep(
     this is `len(k_values)`x the QA-answering cost of one `run_full_reproduction`
     call, not free.
 
-    Resumable per-k: a k whose output file under `results_dir/k_sweep/`
-    already exists is loaded from disk instead of re-running its
-    QA-answering pass.
+    Resumable per-k (a k whose output file under `results_dir/k_sweep/`
+    already exists is loaded from disk, no rerun at all) AND, within a
+    still-incomplete k, resumable per-question via
+    `run_full_reproduction`'s own QA-answering checkpoint -- a kill
+    partway through one k's QA-answering no longer loses that k's
+    progress on rerun.
     """
     sweep_dir = results_dir / "k_sweep"
     sweep_dir.mkdir(parents=True, exist_ok=True)

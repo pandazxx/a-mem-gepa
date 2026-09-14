@@ -183,6 +183,21 @@ this project has resolved.
   becomes actual observed pain, the same way per-turn checkpointing
   (0007) was added after actually hitting a 12+-hour run, not
   speculatively.
+  **Update (2026-09-12): the "actual observed pain" trigger fired, but for
+  QA-answering, not memory-building.** A real GPT-4o-mini/OpenRouter run
+  (paid backend, unlike every prior $0 Ollama run) got killed mid
+  QA-answering and lost everything -- unlike memory-building,
+  `run_full_reproduction`'s QA-answering loop had **zero** checkpointing
+  at all: `results`/`all_metrics` only ever existed in memory, written to
+  disk only if the whole function returned. Added per-question
+  checkpointing (`_qa_progress_path`/`_load_qa_progress`/
+  `_append_qa_progress`, keyed on backend/model/retrieve_k, appended to
+  after every question) -- this is *not* a change to anything the paper's
+  own code does scientifically (prompts, retrieval, scoring untouched),
+  purely an orchestration fix in our wrapper, same category as the
+  file-path redirection this ADR already does. Memory-building's coarser
+  per-conversation granularity is unchanged and still accepted as-is --
+  no observed pain there yet.
 - I could not execute this end-to-end myself -- this sandbox has no
   Ollama/GPU (same limitation as every other real run in this project).
   `run_full_reproduction`'s orchestration logic (caching paths, category

@@ -145,6 +145,7 @@ class _FakeAgent:
         self.temperature_c5 = temperature_c5
         self.memory_system = _FakeMemorySystem()
         self.added = []
+        self.answered = []
         _FakeAgent.instances.append(self)
 
     def add_memory(self, content, time=None):
@@ -152,6 +153,7 @@ class _FakeAgent:
         self.memory_system.memories[f"note-{len(self.added)}"] = content
 
     def answer_question(self, question, category, answer):
+        self.answered.append(question)
         return (f"answer to: {question}", "prompt", "context")
 
 
@@ -360,3 +362,86 @@ def test_format_k_sweep_summary_picks_best_overall_f1_and_breaks_down_by_categor
     best_line = next(line for line in lines if "best overall F1" in line)
     assert best_line.strip().startswith("20"), "k=20 has the higher overall F1 and should be marked best"
     assert "multi_hop" in out
+
+
+def test_run_full_reproduction_resumes_qa_answering_from_progress_file(fake_repro_modules):
+    """Real bug hit on a live run: a GPT-4o-mini/OpenRouter run got killed
+    mid QA-answering -- unlike memory-building (cached per-conversation),
+    the QA-answering loop had zero checkpointing before this, so a rerun
+    re-answered every question from scratch, wasting real API spend.
+    Pre-seeding one question's result in the progress file simulates
+    resuming after a kill partway through."""
+    import json
+
+    from amem_gepa.paper_repro import _qa_progress_path, run_full_reproduction
+
+    results_dir = fake_repro_modules / "results"
+    progress_path = _qa_progress_path(results_dir, "ollama", "llama3.2:1b", 10)
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    progress_path.write_text(json.dumps({
+        "sample_id": 0, "q_idx": 0, "question": "Q1?", "prediction": "cached answer",
+        "reference": "gold1", "category": 1, "metrics": {"f1": 0.99, "bleu1": 0.99},
+    }) + "\n")
+
+    results = run_full_reproduction(
+        dataset_path=fake_repro_modules / "fake.json",
+        backend="ollama",
+        model="llama3.2:1b",
+        retrieve_k=10,
+        results_dir=results_dir,
+    )
+
+    all_answered = [q for agent in _FakeAgent.instances for q in agent.answered]
+    assert "Q1?" not in all_answered, "already-cached question must not be re-answered"
+    assert "Q2?" in all_answered and "Q3?" in all_answered, "uncached questions still get answered"
+    assert results["total_questions"] == 3
+    cached_result = next(r for r in results["individual_results"] if r["question"] == "Q1?")
+    assert cached_result["prediction"] == "cached answer"
+
+
+def test_run_full_reproduction_writes_qa_progress_incrementally(fake_repro_modules):
+    import json
+
+    from amem_gepa.paper_repro import _qa_progress_path, run_full_reproduction
+
+    results_dir = fake_repro_modules / "results"
+    run_full_reproduction(
+        dataset_path=fake_repro_modules / "fake.json",
+        backend="ollama",
+        model="llama3.2:1b",
+        retrieve_k=10,
+        results_dir=results_dir,
+    )
+
+    progress_path = _qa_progress_path(results_dir, "ollama", "llama3.2:1b", 10)
+    lines = [json.loads(line) for line in progress_path.read_text().splitlines() if line.strip()]
+    assert len(lines) == 3
+    assert {line["question"] for line in lines} == {"Q1?", "Q2?", "Q3?"}
+
+
+def test_run_full_reproduction_qa_progress_is_isolated_per_retrieve_k(fake_repro_modules):
+    """QA answers legitimately differ by k -- a progress file from one k
+    must not short-circuit answering at a different k."""
+    from amem_gepa.paper_repro import run_full_reproduction
+
+    results_dir = fake_repro_modules / "results"
+    run_full_reproduction(
+        dataset_path=fake_repro_modules / "fake.json",
+        backend="ollama",
+        model="llama3.2:1b",
+        retrieve_k=10,
+        results_dir=results_dir,
+    )
+    first_run_agent_count = len(_FakeAgent.instances)
+
+    run_full_reproduction(
+        dataset_path=fake_repro_modules / "fake.json",
+        backend="ollama",
+        model="llama3.2:1b",
+        retrieve_k=20,
+        results_dir=results_dir,
+    )
+
+    second_run_agents = _FakeAgent.instances[first_run_agent_count:]
+    all_answered = [q for agent in second_run_agents for q in agent.answered]
+    assert all_answered.count("Q1?") == 1, "k=20 must answer every question fresh, not reuse k=10's progress"
