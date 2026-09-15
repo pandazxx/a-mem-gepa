@@ -39,6 +39,23 @@ REPRO_DIR = Path(__file__).resolve().parent.parent.parent / "external" / "agenti
 # Matches external/agentic-memory-repro/run_k_sweep.sh's own K_VALUES.
 K_SWEEP_VALUES = (10, 15, 20, 25, 30, 35, 40, 45, 50)
 
+# The paper's actual per-category retrieve_k for each model's headline
+# Table 1 number (Appendix A.5, Table 8, read directly from the paper --
+# see docs/decisions/0013). Categories are the same integers as
+# datasets.locomo.CATEGORY_LABELS (1=multi_hop, 2=temporal, 3=open_domain,
+# 4=single_hop, 5=adversarial). Most models use k=10 everywhere ("For
+# models that have already achieved SOTA performance with k=10, we
+# maintain this value without further tuning" -- the paper's own words);
+# only GPT-4o-mini/GPT-4o are tuned away from k=10 on every category.
+PAPER_CATEGORY_K = {
+    "gpt-4o-mini": {1: 40, 2: 40, 3: 50, 4: 50, 5: 40},
+    "gpt-4o": {1: 40, 2: 40, 3: 50, 4: 50, 5: 40},
+    "qwen2.5-1.5b": {1: 10, 2: 10, 3: 10, 4: 10, 5: 10},
+    "qwen2.5-3b": {1: 10, 2: 10, 3: 50, 4: 10, 5: 10},
+    "llama3.2-1b": {1: 10, 2: 10, 3: 10, 4: 10, 5: 10},
+    "llama3.2-3b": {1: 10, 2: 20, 3: 10, 4: 10, 5: 10},
+}
+
 
 def ensure_repro_repo_importable() -> None:
     """Puts external/agentic-memory-repro on sys.path so its sibling-import
@@ -378,6 +395,68 @@ def format_k_sweep_summary(results_by_k: dict[int, dict]) -> str:
         label = CATEGORY_LABELS.get(cat, f"category_{cat}")
         lines.append(f"  {label:14s} F1={f1:.4f} BLEU-1={bleu1:.4f} n={n}")
 
+    return "\n".join(lines)
+
+
+def splice_per_category_results(results_by_k: dict[int, dict], category_k: dict[int, int]) -> dict:
+    """Reconstructs the paper's actual per-category k selection (Table 8,
+    PAPER_CATEGORY_K) from a set of run_k_sweep results. Neither
+    run_full_reproduction nor run_k_sweep apply a different k per category
+    within a single run -- each call is one uniform k end to end -- so
+    matching the paper's real headline number for a model that (unlike
+    Llama-3.2-1b) got per-category tuning means picking each category's
+    stats from the k run specified for it in `category_k`, not from
+    whichever single k scored highest overall.
+
+    `results_by_k` must have an entry for every k value referenced in
+    `category_k` (i.e. run_k_sweep with at least those k_values) or a
+    KeyError is raised naming the missing k -- silently skipping a missing
+    category would produce a spliced result that looks complete but is
+    missing data, worse than failing loudly.
+
+    Returns per-category {f1, bleu1, n, k} plus an "overall" entry that is
+    the n-weighted mean across the spliced categories -- NOT a number the
+    paper itself reports (docs/experiments/001 established the paper has
+    no combined overall column, only per-category and a rank column across
+    competing methods), computed here purely as a convenient single
+    number; callers should label it as such, not as "the paper's overall".
+    """
+    spliced: dict = {}
+    total_n = 0
+    weighted_f1 = 0.0
+    weighted_bleu = 0.0
+    for cat, k in category_k.items():
+        if k not in results_by_k:
+            raise KeyError(
+                f"category {cat} needs k={k}, but results_by_k has no entry for it "
+                f"-- rerun run_k_sweep with k_values including {k}"
+            )
+        stats = results_by_k[k]["aggregate_metrics"][f"category_{cat}"]
+        n = stats["f1"]["count"]
+        spliced[cat] = {"f1": stats["f1"]["mean"], "bleu1": stats["bleu1"]["mean"], "n": n, "k": k}
+        total_n += n
+        weighted_f1 += stats["f1"]["mean"] * n
+        weighted_bleu += stats["bleu1"]["mean"] * n
+
+    if total_n:
+        spliced["overall"] = {"f1": weighted_f1 / total_n, "bleu1": weighted_bleu / total_n, "n": total_n}
+    return spliced
+
+
+def format_spliced_summary(spliced: dict) -> str:
+    """Table matching format_summary's layout, plus the k used per
+    category (since unlike a single run_full_reproduction result, a
+    spliced one mixes k values by design)."""
+    from amem_gepa.datasets.locomo import CATEGORY_LABELS
+
+    lines = [f"{'category':14s} {'k':>4s} {'F1':>8s} {'BLEU-1':>8s} {'n':>6s}"]
+    for cat in sorted(c for c in spliced if c != "overall"):
+        stats = spliced[cat]
+        label = CATEGORY_LABELS.get(cat, f"category_{cat}")
+        lines.append(f"{label:14s} {stats['k']:4d} {stats['f1']:8.4f} {stats['bleu1']:8.4f} {stats['n']:6d}")
+    if "overall" in spliced:
+        overall = spliced["overall"]
+        lines.append(f"{'overall (n-weighted, not a paper number)':40s} {overall['f1']:8.4f} {overall['bleu1']:8.4f} {overall['n']:6d}")
     return "\n".join(lines)
 
 

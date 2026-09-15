@@ -469,3 +469,60 @@ def test_run_full_reproduction_qa_progress_survives_a_slash_in_model_name(fake_r
     assert results["total_questions"] == 3
     progress_file = results_dir / "qa_progress_openai_openai" / "gpt-4o-mini_k40.jsonl"
     assert progress_file.exists()
+
+
+def _fake_category_result(f1_by_cat, bleu_by_cat, n_by_cat):
+    return {
+        "aggregate_metrics": {
+            f"category_{cat}": {"f1": {"mean": f1_by_cat[cat], "count": n_by_cat[cat]}, "bleu1": {"mean": bleu_by_cat[cat]}}
+            for cat in f1_by_cat
+        }
+    }
+
+
+def test_splice_per_category_results_picks_the_right_k_per_category():
+    from amem_gepa.paper_repro import splice_per_category_results
+
+    results_by_k = {
+        40: _fake_category_result(
+            {1: 0.20, 2: 0.30, 5: 0.40}, {1: 0.15, 2: 0.25, 5: 0.35}, {1: 10, 2: 10, 5: 10}
+        ),
+        50: _fake_category_result(
+            {3: 0.50, 4: 0.60}, {3: 0.45, 4: 0.55}, {3: 10, 4: 10}
+        ),
+    }
+    category_k = {1: 40, 2: 40, 3: 50, 4: 50, 5: 40}
+
+    spliced = splice_per_category_results(results_by_k, category_k)
+
+    assert spliced[1] == {"f1": 0.20, "bleu1": 0.15, "n": 10, "k": 40}
+    assert spliced[3] == {"f1": 0.50, "bleu1": 0.45, "n": 10, "k": 50}
+    # n-weighted mean across all 5 categories, all n=10 here so it's a plain mean
+    assert spliced["overall"]["f1"] == pytest.approx((0.20 + 0.30 + 0.50 + 0.60 + 0.40) / 5)
+    assert spliced["overall"]["n"] == 50
+
+
+def test_splice_per_category_results_raises_on_missing_k():
+    from amem_gepa.paper_repro import splice_per_category_results
+
+    results_by_k = {40: _fake_category_result({1: 0.20}, {1: 0.15}, {1: 10})}
+    category_k = {1: 40, 3: 50}  # k=50 never run
+
+    with pytest.raises(KeyError, match="50"):
+        splice_per_category_results(results_by_k, category_k)
+
+
+def test_format_spliced_summary_shows_k_per_category():
+    from amem_gepa.paper_repro import format_spliced_summary
+
+    spliced = {
+        1: {"f1": 0.27, "bleu1": 0.20, "n": 282, "k": 40},
+        3: {"f1": 0.15, "bleu1": 0.12, "n": 96, "k": 50},
+        "overall": {"f1": 0.30, "bleu1": 0.25, "n": 378},
+    }
+
+    out = format_spliced_summary(spliced)
+
+    assert "multi_hop" in out and " 40 " in out
+    assert "open_domain" in out and " 50 " in out
+    assert "overall" in out

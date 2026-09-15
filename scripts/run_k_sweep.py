@@ -27,16 +27,67 @@ cheapest way to reconstruct the paper's actual per-category number is
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 import typer
 from dotenv import load_dotenv
 
 from amem_gepa.config import load_config
 from amem_gepa.datasets.locomo import RAW_PATH, download_raw
-from amem_gepa.paper_repro import K_SWEEP_VALUES, format_k_sweep_summary, run_k_sweep
+from amem_gepa.paper_repro import (
+    K_SWEEP_VALUES,
+    PAPER_CATEGORY_K,
+    format_k_sweep_summary,
+    format_spliced_summary,
+    run_k_sweep,
+    splice_per_category_results,
+)
+
+RESULTS_DIR = Path("results/paper_repro")
 
 app = typer.Typer()
+
+
+def _try_print_spliced_summary(model: str, results_by_k: dict) -> None:
+    """If this model has a known per-category k (PAPER_CATEGORY_K, e.g.
+    GPT-4o-mini/GPT-4o via OpenRouter -- docs/decisions/0013 Table 8),
+    reconstruct and print the paper-matching spliced comparison. Loads any
+    needed k not already in `results_by_k` from a prior k-sweep's cached
+    output on disk (results_dir/k_sweep/) rather than requiring every
+    needed k to have been run in this exact invocation -- this is
+    deliberately exact-match only on `model` (after stripping an
+    "provider/" prefix, e.g. "openai/gpt-4o-mini" -> "gpt-4o-mini"), not
+    fuzzy: Ollama's "llama3.2:1b" vs the paper's "llama3.2-1b" naming don't
+    match here, and that's fine since Llama-3.2-1b uses a uniform k=10
+    anyway (no splice needed). Silently does nothing if there's no match
+    or a needed k hasn't been run/cached yet."""
+    model_key = model.rsplit("/", 1)[-1].lower()
+    category_k = PAPER_CATEGORY_K.get(model_key)
+    if category_k is None:
+        return
+
+    combined = dict(results_by_k)
+    missing = []
+    for k in set(category_k.values()):
+        if k in combined:
+            continue
+        cached_file = RESULTS_DIR / "k_sweep" / f"results_k{k}.json"
+        if cached_file.exists():
+            combined[k] = json.loads(cached_file.read_text())
+        else:
+            missing.append(k)
+
+    if missing:
+        print(
+            f"\n[k-sweep] paper-matching splice for {model_key!r} needs k={sorted(set(category_k.values()))}, "
+            f"but k={missing} hasn't been run yet -- skipping the spliced comparison for now."
+        )
+        return
+
+    print(f"\nSpliced per-category comparison for {model_key!r} (paper's own k per category, docs/decisions/0013):")
+    print(format_spliced_summary(splice_per_category_results(combined, category_k)))
 
 
 @app.command()
@@ -78,6 +129,7 @@ def main(
         k_values=ks,
         ratio=r,
         temperature_c5=repro_cfg["temperature_c5"],
+        results_dir=RESULTS_DIR,
     )
 
     print()
@@ -88,6 +140,7 @@ def main(
         "rerun `just reproduce --retrieve-k <best>` to make that the "
         "committed baseline."
     )
+    _try_print_spliced_summary(model, results_by_k)
 
 
 if __name__ == "__main__":
