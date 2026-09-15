@@ -57,3 +57,4 @@ def test_load_split_end_to_end(tmp_path):
     adversarial = [i for i in instances if i.is_adversarial]
     assert len(adversarial) == 1
     assert adversarial[0].gold_answer is None
+    assert adversarial[0].adversarial_answer == "trap"

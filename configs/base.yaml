@@ -9,9 +9,16 @@ models:
   # A-MEM's own LLM backend (the system under test) -- LiteLLM model-id string.
   amem_llm_model: ${AMEM_LLM_MODEL}
   amem_embedding_model: ${AMEM_EMBEDDING_MODEL}
+  # Only meaningful for ollama-routed models; harmless to leave set otherwise.
+  amem_llm_api_base: ${OLLAMA_API_BASE}
   # GEPA optimization roles (docs/decisions/0003).
   gepa_task_lm: ${GEPA_TASK_LM}
   gepa_reflection_lm: ${GEPA_REFLECTION_LM}
+  # Paper reproduction (docs/decisions/0013) -- separate from amem_llm_model
+  # above: WujiangXu/AgenticMemory's own backend/model naming, bare model
+  # name, not a LiteLLM-prefixed string.
+  paper_repro_backend: ${PAPER_REPRO_BACKEND}
+  paper_repro_model: ${PAPER_REPRO_MODEL}
 
 gepa:
   max_metric_calls: 150
@@ -20,5 +27,18 @@ gepa:
     evolution: src/amem_gepa/prompts/baseline/evolution.txt
 
 evaluation:
+  # Which split run_baseline.py/run_eval.py score by default (docs/decisions/0004).
+  split: test
+  # Top-k memories retrieved per question (search_agentic, docs/decisions/0006).
+  retrieval_k: 10
+  qa_prompt: src/amem_gepa/prompts/qa_answer.txt
   # Bootstrap CI resamples for the headline test-set metric (docs/decisions/0004).
   bootstrap_resamples: 10000
+
+# Paper reproduction (docs/decisions/0013, `just reproduce`) -- full 10-
+# conversation LoCoMo dataset, no train/val/test split (that split is only
+# for the later GEPA comparison phase, not part of the paper's own benchmark).
+paper_repro:
+  retrieve_k: 10  # their default; the paper's headline numbers used a per-model k-sweep
+  ratio: 1.0       # fraction of the 10 conversations to evaluate; 1.0 = all
+  temperature_c5: 0.5  # matches their --temperature_c5 default

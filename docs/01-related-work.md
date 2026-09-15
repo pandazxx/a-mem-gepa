@@ -63,13 +63,17 @@ straightforward.
   earlier draft of this doc cited ~7,500 QA pairs — that figure is for the
   *original* 50-conversation pool before the released 10-conversation subset
   was curated; corrected here.
-- Five QA categories, via the integer `category` field, with real counts
-  across all 1,986 pairs:
-  - 1 = single-hop — 282
+- Five QA categories, via the integer `category` field. **This mapping was
+  wrong in an earlier version of this doc** (had 1 and 4 swapped, 3
+  mislabeled) — corrected by cross-checking exact per-category counts
+  against the paper's own "QA Benchmark Statistics" appendix, see
+  [decisions/0010](decisions/0010-paper-exact-f1-and-category-fix.md).
+  Real counts across all 1,986 pairs:
+  - 1 = multi-hop reasoning — 282
   - 2 = temporal reasoning — 321
-  - 3 = multi-hop reasoning — 96 (by far the scarcest — ~9.6/conversation on
+  - 3 = open-domain — 96 (by far the scarcest — ~9.6/conversation on
     average, thin for per-category reporting on a 3-conversation test split)
-  - 4 = open-domain — 841 (the largest category by a wide margin)
+  - 4 = single-hop — 841 (the largest category by a wide margin)
   - 5 = adversarial (unanswerable; `answer` is `null`, the "trap" answer is
     in `adversarial_answer`) — 446
 - Used in the original A-MEM paper as an evaluation benchmark, which makes it

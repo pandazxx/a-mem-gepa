@@ -9,11 +9,13 @@ Accepted (2026-09-06)
 Milestone 2 includes reproducing the original A-MEM paper's LoCoMo results
 through our own harness, as a sanity check that the harness itself is
 correct before it's trusted for the GEPA comparison. The paper reports
-numbers (ROUGE-L on LoCoMo) for six backbones: `gpt-4o-mini`, `gpt-4o`,
-`Qwen2.5:3b`, `Qwen2.5:1.5b`, `Llama 3.2:3b`, `Llama 3.2:1b`. This is a
-sanity check, not the headline result, so the goal is minimum effort/cost to
-confirm the harness reproduces the right shape of result — not picking the
-backbone that will eventually carry the GEPA comparison.
+numbers (F1 and BLEU on LoCoMo per category, not ROUGE-L -- corrected in
+docs/decisions/0010 after an earlier secondary summary got this wrong) for
+six backbones: `gpt-4o-mini`, `gpt-4o`, `Qwen2.5:3b`, `Qwen2.5:1.5b`,
+`Llama 3.2:3b`, `Llama 3.2:1b`. This is a sanity check, not the headline
+result, so the goal is minimum effort/cost to confirm the harness
+reproduces the right shape of result — not picking the backbone that will
+eventually carry the GEPA comparison.
 
 ## Decision
 

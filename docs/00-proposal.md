@@ -54,8 +54,9 @@ adversarial) rather than uniformly across all categories.
 
 1. **Dataset** — fetch LoCoMo, implement `datasets/locomo.py`, generate and
    commit the split manifest (see [decisions/0004](decisions/0004-train-val-test-split.md)).
-2. **Baseline + reproduction sanity check** — implement `metrics.py`
-   (the paper reports ROUGE-L on LoCoMo, not plain accuracy, so match that),
+2. **Baseline + reproduction sanity check** — implement `metrics.py` to
+   match the paper's actual per-category F1 (see
+   [decisions/0010](decisions/0010-paper-exact-f1-and-category-fix.md)),
    reproduce the paper's numbers through our own harness on `Llama 3.2:1b`
    (see [decisions/0005](decisions/0005-reproduction-model.md)) as a
    correctness check before trusting the harness for anything else, then run
