@@ -445,3 +445,27 @@ def test_run_full_reproduction_qa_progress_is_isolated_per_retrieve_k(fake_repro
     second_run_agents = _FakeAgent.instances[first_run_agent_count:]
     all_answered = [q for agent in second_run_agents for q in agent.answered]
     assert all_answered.count("Q1?") == 1, "k=20 must answer every question fresh, not reuse k=10's progress"
+
+
+def test_run_full_reproduction_qa_progress_survives_a_slash_in_model_name(fake_repro_modules):
+    """Real bug hit on a live run: model="openai/gpt-4o-mini" (OpenRouter's
+    naming) makes _qa_progress_path land in a nested directory (pathlib
+    splits on the "/"), same as the existing cached_memories_{backend}_{model}
+    dir already does -- but _append_qa_progress's open(path, "a") doesn't
+    create parent directories, unlike the memory cache dir's mkdir(parents=True).
+    Raised a bare FileNotFoundError on the very first answered question."""
+    from amem_gepa.paper_repro import run_full_reproduction
+
+    results_dir = fake_repro_modules / "results"
+
+    results = run_full_reproduction(
+        dataset_path=fake_repro_modules / "fake.json",
+        backend="openai",
+        model="openai/gpt-4o-mini",
+        retrieve_k=40,
+        results_dir=results_dir,
+    )
+
+    assert results["total_questions"] == 3
+    progress_file = results_dir / "qa_progress_openai_openai" / "gpt-4o-mini_k40.jsonl"
+    assert progress_file.exists()

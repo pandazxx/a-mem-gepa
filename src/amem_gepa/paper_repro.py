@@ -110,6 +110,12 @@ def _load_qa_progress(path: Path) -> dict[tuple[int, int], dict]:
 
 
 def _append_qa_progress(path: Path, record: dict) -> None:
+    # Real bug hit on a live run: a `/` in `model` (e.g. "openai/gpt-4o-mini")
+    # makes `path` land in a nested directory (see _qa_progress_path's
+    # docstring) that nothing had created yet -- open(path, "a") doesn't
+    # create parent directories, unlike the memory cache dir's own
+    # mkdir(parents=True) a few lines above every use of it.
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
         f.write(json.dumps(record) + "\n")
 
