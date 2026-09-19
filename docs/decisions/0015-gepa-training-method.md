@@ -95,6 +95,16 @@ across conversations would cost one build *per question*.
   systematically over-represent sparse/blank memory states; only worth
   adopting after a calibration run shows the full-conversation loop is too
   slow in practice. Val/test always stay full-conversation either way.
+- **Smoke mode (addendum, 2026-09-19)**: `--smoke` / `just gepa-smoke`
+  runs the identical loop on conversations truncated to their first
+  `max_turns` turns (questions filtered to evidence-complete ones, same
+  logic as 0008's demo sampler), 2 train conversations, ≤10 val questions,
+  tiny `max_metric_calls`. This is the sanctioned use of truncation:
+  validating build → cache → QA → reflection → acceptance plumbing before
+  committing days of wall-clock, **never** producing reported numbers.
+  Smoke runs skip the val-subset manifest entirely, and the build cache
+  keys include the turn count so a truncated build can never be mistaken
+  for (or collide with) a full build of the same conversation.
 
 ## Consequences
 

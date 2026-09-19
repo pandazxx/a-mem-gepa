@@ -151,16 +151,22 @@ class AMemGEPAAdapter:
             )
 
         cand_hash = candidate_hash(candidate)
-        agents: dict[str, tuple] = {}  # conversation_id -> (agent, BuildTrace|None, cache_hit, error)
+        # Keyed by (conversation, turn count), not conversation alone: a
+        # truncated smoke instance and a full instance of the same
+        # conversation are different memory states and must not share a
+        # build (or a cache entry -- see _cache_paths).
+        agents: dict[tuple[str, int], tuple] = {}
         outputs: list[Any] = []
         scores: list[float] = []
         trajectories: list[ItemTrajectory] = []
 
         for item in batch:
             conv_id = self._conv_id(item)
-            if conv_id not in agents:
-                agents[conv_id] = self._build_or_load(candidate, cand_hash, conv_id, self._turns(item))
-            agent, build_trace, cache_hit, build_error = agents[conv_id]
+            turns = self._turns(item)
+            agent_key = (conv_id, len(turns))
+            if agent_key not in agents:
+                agents[agent_key] = self._build_or_load(candidate, cand_hash, conv_id, turns)
+            agent, build_trace, cache_hit, build_error = agents[agent_key]
 
             traj = ItemTrajectory(
                 conversation_id=conv_id,
@@ -215,8 +221,11 @@ class AMemGEPAAdapter:
     def _turns(self, item: DataInst) -> list:
         return item.turns
 
-    def _cache_paths(self, cand_hash: str, conv_id: str) -> dict[str, Path]:
-        base = self.cache_dir / cand_hash / conv_id
+    def _cache_paths(self, cand_hash: str, conv_id: str, n_turns: int) -> dict[str, Path]:
+        # n_turns in the path keeps truncated smoke builds (docs/decisions/
+        # 0015's smoke addendum) from colliding with full builds of the
+        # same conversation under the same candidate.
+        base = self.cache_dir / cand_hash / f"{conv_id}_t{n_turns}"
         return {
             "dir": base,
             "memories": base / "memories.pkl",
@@ -244,7 +253,7 @@ class AMemGEPAAdapter:
         conversation) hits the cache and would otherwise have no
         construction/evolution trace to reflect over -- rebuilding just to
         re-record would cost a full build."""
-        paths = self._cache_paths(cand_hash, conv_id)
+        paths = self._cache_paths(cand_hash, conv_id, len(turns))
         try:
             agent = self._make_agent(candidate)
         except Exception as e:  # noqa: BLE001 -- backend down, submodule missing, ...

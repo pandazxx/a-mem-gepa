@@ -94,3 +94,46 @@ def test_val_subset_is_deterministic_and_unique():
     b = build_val_subset(instances, per_category_per_conversation=15)
     assert [i.question for i in a] == [i.question for i in b]
     assert len({i.question for i in a}) == len(a)
+
+
+def _evidenced_instances(conv_id, n_turns=60):
+    from amem_gepa.datasets.locomo import LoCoMoInstance
+
+    turns = [_turn(i) for i in range(n_turns)]
+    return turns, [
+        LoCoMoInstance(
+            conversation_id=conv_id, turns=turns, question="early", gold_answer="a",
+            category=4, evidence=["D1:5"],
+        ),
+        LoCoMoInstance(
+            conversation_id=conv_id, turns=turns, question="late", gold_answer="b",
+            category=4, evidence=["D1:55"],
+        ),
+        LoCoMoInstance(
+            conversation_id=conv_id, turns=turns, question="straddling", gold_answer="c",
+            category=1, evidence=["D1:5", "D1:55"],
+        ),
+        LoCoMoInstance(
+            conversation_id=conv_id, turns=turns, question="adv", gold_answer=None,
+            category=5, adversarial_answer="trap", evidence=None,
+        ),
+        LoCoMoInstance(
+            conversation_id=conv_id, turns=turns, question="unannotated", gold_answer="d",
+            category=4, evidence=None,
+        ),
+    ]
+
+
+def test_truncate_instances_keeps_only_evidence_complete_questions():
+    from amem_gepa.datasets.locomo import truncate_instances
+
+    _, instances = _evidenced_instances("conv-a")
+    truncated = truncate_instances(instances, max_turns=40)
+
+    questions = {i.question for i in truncated}
+    assert questions == {"early", "adv"}, (
+        "evidence past the window ('late', 'straddling') and unverifiable "
+        "non-adversarial questions ('unannotated') must be dropped"
+    )
+    for inst in truncated:
+        assert len(inst.turns) == 40

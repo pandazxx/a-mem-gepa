@@ -322,6 +322,51 @@ def build_question_groups(
     return groups
 
 
+def truncate_instances(
+    instances: list[LoCoMoInstance],
+    max_turns: int,
+) -> list[LoCoMoInstance]:
+    """Smoke-run variant of a split (docs/decisions/0015's smoke addendum):
+    every conversation cut to its first `max_turns` turns, keeping only
+    questions whose evidence falls entirely inside the kept window -- so
+    they're genuinely answerable from what gets replayed (same evidence
+    logic as load_demo_sample, docs/decisions/0008). Adversarial questions
+    carry no evidence by construction and are kept as-is (they're
+    unanswerable against any window, which is the point).
+
+    For plumbing validation ONLY, never for reported numbers: truncation
+    over-represents sparse/blank memory states relative to the real eval
+    (the reason docs/decisions/0015 deferred truncated *training*).
+    """
+    truncated_turns: dict[str, list[LoCoMoTurn]] = {}
+    valid_dia_ids: dict[str, set[str]] = {}
+    out: list[LoCoMoInstance] = []
+    for inst in instances:
+        conv_id = inst.conversation_id
+        if conv_id not in truncated_turns:
+            truncated_turns[conv_id] = inst.turns[:max_turns]
+            valid_dia_ids[conv_id] = {t.dia_id for t in truncated_turns[conv_id]}
+        evidence = inst.evidence or []
+        if evidence and not set(evidence).issubset(valid_dia_ids[conv_id]):
+            continue
+        if not evidence and not inst.is_adversarial:
+            # A non-adversarial question with no evidence annotation can't
+            # be verified answerable from the window -- skip it in smoke.
+            continue
+        out.append(
+            LoCoMoInstance(
+                conversation_id=conv_id,
+                turns=truncated_turns[conv_id],
+                question=inst.question,
+                gold_answer=inst.gold_answer,
+                category=inst.category,
+                adversarial_answer=inst.adversarial_answer,
+                evidence=inst.evidence,
+            )
+        )
+    return out
+
+
 def build_val_subset(
     instances: list[LoCoMoInstance],
     per_category_per_conversation: int = 15,

@@ -345,3 +345,28 @@ def test_reflective_dataset_falls_back_to_aggregate_example(fake_repro):
     assert len(examples) == 1
     assert "single_hop" in examples[0]["Feedback"], "aggregate feedback must include per-category scores"
     assert "CONSTRAINT" in examples[0]["Feedback"]
+
+
+def test_truncated_and_full_builds_do_not_share_cache(fake_repro):
+    adapter = fake_repro()
+    _FakeAgent.answers = {"Q1": "Rex"}
+    full = _instance("Q1", "Rex")
+    truncated = LoCoMoInstance(
+        conversation_id="conv-a",
+        turns=TURNS[:1],
+        question="Q1",
+        gold_answer="Rex",
+        category=4,
+    )
+
+    adapter.evaluate([full], CANDIDATE)
+    adapter.evaluate([truncated], CANDIDATE)
+
+    assert adapter.builds_performed == 2, "different turn counts are different memory states"
+    assert adapter.build_cache_hits == 0
+    assert _FakeAgent.instances[1].added == ["Speaker Alicesays : I adopted a dog named Rex"]
+
+    # Same truncation again: now it's a legitimate cache hit.
+    adapter2 = fake_repro()
+    adapter2.evaluate([truncated], CANDIDATE)
+    assert adapter2.build_cache_hits == 1
