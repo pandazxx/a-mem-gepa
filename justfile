@@ -34,9 +34,18 @@ reproduce config="configs/base.yaml":
 k-sweep config="configs/base.yaml":
     uv run python scripts/run_k_sweep.py --config {{config}}
 
-# Run a GEPA optimization job (costs real API calls — confirm budget first)
-gepa-optimize config="configs/base.yaml":
-    uv run python scripts/run_gepa_optimize.py --config {{config}}
+# Run a GEPA optimization job (costs real API calls — confirm budget first).
+# Without extra args this only PRINTS the run plan; append `--yes` to start:
+#   just gepa-optimize configs/base.yaml --yes
+gepa-optimize config="configs/base.yaml" *args="":
+    uv run python scripts/run_gepa_optimize.py --config {{config}} {{args}}
+
+# Tiny GEPA sanity run on truncated conversations (gepa_smoke config
+# section) -- validates the whole loop before committing days to a real
+# run. Numbers are meaningless; plumbing only. Still needs --yes to start:
+#   just gepa-smoke configs/base.yaml --yes
+gepa-smoke config="configs/base.yaml" *args="":
+    uv run python scripts/run_gepa_optimize.py --config {{config}} --smoke {{args}}
 
 # Evaluate a specific prompt candidate on the test set
 eval candidate config="configs/base.yaml":

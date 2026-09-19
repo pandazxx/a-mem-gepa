@@ -21,10 +21,46 @@ models:
   paper_repro_model: ${PAPER_REPRO_MODEL}
 
 gepa:
-  max_metric_calls: 150
-  seed_candidate:
-    note_construction: src/amem_gepa/prompts/baseline/note_construction.txt
-    evolution: src/amem_gepa/prompts/baseline/evolution.txt
+  # Budget arithmetic (docs/decisions/0015): GEPA counts one metric call per
+  # batch element. A full val eval costs len(valset) (~150) calls and happens
+  # once for the seed + once per *accepted* candidate; a reflection minibatch
+  # costs reflection_minibatch_size calls per iteration. 2000 ≈ seed val
+  # (150) + ~11 accepted candidates (1650) + ~100 minibatch evals -- the
+  # dollar cost is dominated by memory *builds*, not metric calls, so
+  # confirm both with the run plan (`just gepa-optimize`, no --yes) first.
+  max_metric_calls: 2000
+  # One minibatch element = one LoCoMoQuestionGroup = one memory build.
+  reflection_minibatch_size: 2
+  train_questions_per_category: 3
+  val_questions_per_category_per_conversation: 15
+  val_subset_manifest: configs/gepa_val_subset.json
+  retrieve_k: 10
+  temperature_c5: 0.5
+  # "refusal" (default): adversarial questions score 1.0 when the model
+  # picks "Not mentioned in the conversation" -- the paper's stated intent
+  # for category 5. "paper": their calculate_metrics against the trap text
+  # (the sign-ambiguous direction documented in docs/decisions/0013).
+  adversarial_scoring: refusal
+  cache_dir: results/gepa_cache
+  # The paper's verbatim prompts (docs/decisions/0014) -- 4 components
+  # matching the repro pipeline, generated from llm_text_parsers' constants.
+  seed_candidate_dir: src/amem_gepa/prompts/baseline_repro
+
+# Overrides applied on top of `gepa:` when run_gepa_optimize.py gets
+# --smoke (`just gepa-smoke`): a tiny sanity pass on truncated
+# conversations that exercises build -> cache -> QA -> reflection ->
+# acceptance -> val end to end. Sized for a local model: ~40-turn builds
+# (minutes each, vs ~1h full), 2 train conversations, <=10 val questions.
+# Numbers from a smoke run are meaningless -- plumbing only
+# (docs/decisions/0015).
+gepa_smoke:
+  max_turns: 40
+  train_conversations: 2
+  train_questions_per_category: 1
+  val_questions_per_category_per_conversation: 1
+  reflection_minibatch_size: 1
+  # ~ seed val (<=10) + ~15 minibatch iterations + 1-2 accepted val evals
+  max_metric_calls: 45
 
 evaluation:
   # Which split run_baseline.py/run_eval.py score by default (docs/decisions/0004).
