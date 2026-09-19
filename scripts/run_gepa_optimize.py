@@ -31,16 +31,30 @@ def main(
     config: str = typer.Option(..., "--config"),
     yes: bool = typer.Option(False, "--yes", help="Actually start the run (otherwise: print the plan and exit)."),
     run_label: str = typer.Option(None, "--run-label", help="Results dir name; default: gepa_<timestamp>."),
+    smoke: bool = typer.Option(
+        False,
+        "--smoke",
+        help="Tiny sanity run on truncated conversations (gepa_smoke config section): validates the "
+        "build -> cache -> QA -> reflection -> acceptance loop end to end. Plumbing only -- its "
+        "numbers mean nothing (docs/decisions/0015).",
+    ),
 ):
     load_dotenv()
 
     from amem_gepa.config import load_config
-    from amem_gepa.datasets.locomo import build_question_groups, build_val_subset, load_split
+    from amem_gepa.datasets.locomo import (
+        build_question_groups,
+        build_val_subset,
+        load_split,
+        truncate_instances,
+    )
     from amem_gepa.gepa_adapter import AMemGEPAAdapter
     from amem_gepa.repro_injection import COMPONENTS, load_baseline_candidate, validate_candidate
 
     cfg = load_config(config)
-    gepa_cfg = cfg["gepa"]
+    gepa_cfg = dict(cfg["gepa"])
+    if smoke:
+        gepa_cfg.update(cfg.get("gepa_smoke", {}))
     backend = cfg["models"]["paper_repro_backend"]
     model = cfg["models"]["paper_repro_model"]
     reflection_lm = cfg["models"]["gepa_reflection_lm"]
@@ -51,42 +65,60 @@ def main(
         typer.echo(f"Seed candidate invalid: {problems}")
         raise typer.Exit(code=1)
 
+    train_instances = load_split("train")
+    val_instances = load_split("val")
+    if smoke:
+        max_turns = gepa_cfg.get("max_turns", 40)
+        train_instances = truncate_instances(train_instances, max_turns)
+        val_instances = truncate_instances(val_instances, max_turns)
+        keep = gepa_cfg.get("train_conversations", 2)
+        kept_ids = sorted({i.conversation_id for i in train_instances})[:keep]
+        train_instances = [i for i in train_instances if i.conversation_id in kept_ids]
+
     trainset = build_question_groups(
-        load_split("train"), per_category=gepa_cfg["train_questions_per_category"]
+        train_instances, per_category=gepa_cfg["train_questions_per_category"]
     )
     valset = build_val_subset(
-        load_split("val"),
+        val_instances,
         per_category_per_conversation=gepa_cfg["val_questions_per_category_per_conversation"],
     )
+    if not trainset or not valset:
+        typer.echo("ERROR: empty trainset or valset (smoke truncation too aggressive?)")
+        raise typer.Exit(code=1)
 
     # The val subset is derived deterministically, but commit it as a
     # manifest anyway (same reasoning as configs/locomo_split.json): if the
     # dataset file ever changes upstream, the subset should change via a
-    # reviewed diff, not silently.
-    manifest_path = Path(gepa_cfg.get("val_subset_manifest", "configs/gepa_val_subset.json"))
-    manifest = [_val_manifest_entry(inst) for inst in valset]
-    if manifest_path.exists():
-        committed = json.loads(manifest_path.read_text())
-        if committed != manifest:
-            typer.echo(
-                f"ERROR: derived val subset differs from committed {manifest_path} "
-                "(dataset drift or a parameter change). Regenerate the manifest deliberately "
-                "(delete it and rerun) and review the diff before optimizing."
-            )
-            raise typer.Exit(code=1)
-    else:
-        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-        typer.echo(f"Wrote val-subset manifest to {manifest_path} -- commit it with this run's PR.")
+    # reviewed diff, not silently. Smoke runs skip this entirely -- their
+    # truncated subset is not the real one and must not touch the manifest.
+    if not smoke:
+        manifest_path = Path(gepa_cfg.get("val_subset_manifest", "configs/gepa_val_subset.json"))
+        manifest = [_val_manifest_entry(inst) for inst in valset]
+        if manifest_path.exists():
+            committed = json.loads(manifest_path.read_text())
+            if committed != manifest:
+                typer.echo(
+                    f"ERROR: derived val subset differs from committed {manifest_path} "
+                    "(dataset drift or a parameter change). Regenerate the manifest deliberately "
+                    "(delete it and rerun) and review the diff before optimizing."
+                )
+                raise typer.Exit(code=1)
+        else:
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+            typer.echo(f"Wrote val-subset manifest to {manifest_path} -- commit it with this run's PR.")
 
-    label = run_label or f"gepa_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    default_label = f"gepa_{'smoke_' if smoke else ''}{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    label = run_label or default_label
     run_dir = Path("results") / label
 
     train_convs = sorted({g.conversation_id for g in trainset})
     val_convs = sorted({i.conversation_id for i in valset})
     minibatch = gepa_cfg.get("reflection_minibatch_size", 2)
 
-    typer.echo("GEPA run plan")
+    typer.echo(f"GEPA run plan{' (SMOKE -- plumbing check, numbers are meaningless)' if smoke else ''}")
     typer.echo(f"  task backend/model:   {backend} / {model}")
+    if smoke:
+        typer.echo(f"  smoke truncation:     first {gepa_cfg.get('max_turns', 40)} turns per conversation")
     typer.echo(f"  reflection_lm:        {reflection_lm}")
     typer.echo(f"  components:           {', '.join(COMPONENTS)}")
     typer.echo(f"  trainset:             {len(trainset)} groups over {len(train_convs)} conversations")
@@ -103,6 +135,21 @@ def main(
     if not yes:
         typer.echo("\nDry plan only. Confirm budget/models per CLAUDE.md, then rerun with --yes.")
         raise typer.Exit(code=0)
+
+    # Preflight: one tiny completion through the exact controller stack the
+    # run will use, so a wrong OLLAMA_HOST / missing model fails in seconds
+    # with a clear error instead of an hour into the first build. (Two
+    # same-purpose env vars exist -- OLLAMA_HOST for this native-ollama
+    # path, OLLAMA_API_BASE for the LiteLLM-routed pipelines; see
+    # docs/decisions/0013's dual-variable warning.)
+    from amem_gepa.paper_repro import ensure_repro_repo_importable
+
+    ensure_repro_repo_importable()
+    from memory_layer_robust import RobustLLMController
+
+    typer.echo(f"Preflight: pinging {backend}/{model} ...")
+    RobustLLMController(backend=backend, model=model, check_connection=True)
+    typer.echo("Preflight OK.")
 
     import gepa
 
@@ -134,6 +181,7 @@ def main(
         (best_dir / f"{component}.txt").write_text(text)
 
     summary = {
+        "smoke": smoke,
         "best_val_aggregate": result.val_aggregate_scores[result.best_idx],
         "num_candidates": len(result.candidates),
         "builds_performed": adapter.builds_performed,
