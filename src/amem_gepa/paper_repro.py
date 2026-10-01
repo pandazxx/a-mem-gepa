@@ -345,9 +345,18 @@ def run_k_sweep(
 
     results_by_k: dict[int, dict] = {}
     for k in k_values:
-        out_file = sweep_dir / f"results_k{k}.json"
+        # Real bug hit on a live run: this filename used to be just
+        # f"results_k{k}.json" -- no backend/model in it at all. Running
+        # the sweep for a second model reused the *first* model's k=40/50
+        # result files verbatim (the "already computed" resumability check
+        # below has no way to tell them apart), silently reporting the old
+        # model's numbers as if they were the new model's, no error, no
+        # warning. Matches _qa_progress_path's naming (backend_model_k) --
+        # a "/" in `model` (e.g. "openai/gpt-4o-mini") produces a nested
+        # directory via pathlib the same way it already does there.
+        out_file = sweep_dir / f"results_{backend}_{model}_k{k}.json"
         if out_file.exists():
-            eval_logger.info(f"[k-sweep] k={k} already computed -- loading {out_file}")
+            eval_logger.info(f"[k-sweep] k={k} already computed for {backend}/{model} -- loading {out_file}")
             results_by_k[k] = json.loads(out_file.read_text())
             continue
 
@@ -361,6 +370,9 @@ def run_k_sweep(
             temperature_c5=temperature_c5,
             results_dir=results_dir,
         )
+        # Same "/" in model" nested-directory consequence as
+        # _append_qa_progress hit (d71f798) -- mkdir before writing.
+        out_file.parent.mkdir(parents=True, exist_ok=True)
         out_file.write_text(json.dumps(result, indent=2))
         results_by_k[k] = result
 
