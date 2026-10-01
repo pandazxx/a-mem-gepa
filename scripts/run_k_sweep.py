@@ -50,19 +50,21 @@ RESULTS_DIR = Path("results/paper_repro")
 app = typer.Typer()
 
 
-def _try_print_spliced_summary(model: str, results_by_k: dict) -> None:
+def _try_print_spliced_summary(backend: str, model: str, results_by_k: dict) -> None:
     """If this model has a known per-category k (PAPER_CATEGORY_K, e.g.
     GPT-4o-mini/GPT-4o via OpenRouter -- docs/decisions/0013 Table 8),
     reconstruct and print the paper-matching spliced comparison. Loads any
     needed k not already in `results_by_k` from a prior k-sweep's cached
-    output on disk (results_dir/k_sweep/) rather than requiring every
-    needed k to have been run in this exact invocation -- this is
-    deliberately exact-match only on `model` (after stripping an
-    "provider/" prefix, e.g. "openai/gpt-4o-mini" -> "gpt-4o-mini"), not
-    fuzzy: Ollama's "llama3.2:1b" vs the paper's "llama3.2-1b" naming don't
-    match here, and that's fine since Llama-3.2-1b uses a uniform k=10
-    anyway (no splice needed). Silently does nothing if there's no match
-    or a needed k hasn't been run/cached yet."""
+    output on disk (results_dir/k_sweep/, keyed on backend+model+k -- a
+    real bug once had this keyed on k alone, silently reusing a different
+    model's stale result) rather than requiring every needed k to have
+    been run in this exact invocation -- this is deliberately exact-match
+    only on `model` (after stripping an "provider/" prefix, e.g.
+    "openai/gpt-4o-mini" -> "gpt-4o-mini"), not fuzzy: Ollama's
+    "llama3.2:1b" vs the paper's "llama3.2-1b" naming don't match here,
+    and that's fine since Llama-3.2-1b uses a uniform k=10 anyway (no
+    splice needed). Silently does nothing if there's no match or a needed
+    k hasn't been run/cached yet."""
     model_key = model.rsplit("/", 1)[-1].lower()
     category_k = PAPER_CATEGORY_K.get(model_key)
     if category_k is None:
@@ -73,7 +75,7 @@ def _try_print_spliced_summary(model: str, results_by_k: dict) -> None:
     for k in set(category_k.values()):
         if k in combined:
             continue
-        cached_file = RESULTS_DIR / "k_sweep" / f"results_k{k}.json"
+        cached_file = RESULTS_DIR / "k_sweep" / f"results_{backend}_{model}_k{k}.json"
         if cached_file.exists():
             combined[k] = json.loads(cached_file.read_text())
         else:
@@ -140,7 +142,7 @@ def main(
         "rerun `just reproduce --retrieve-k <best>` to make that the "
         "committed baseline."
     )
-    _try_print_spliced_summary(model, results_by_k)
+    _try_print_spliced_summary(backend, model, results_by_k)
 
 
 if __name__ == "__main__":

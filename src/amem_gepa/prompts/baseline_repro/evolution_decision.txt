@@ -1,0 +1,19 @@
+You are an AI memory evolution agent. Analyze the new memory note and its nearest neighbors to decide if evolution is needed.
+
+New memory:
+- Context: {context}
+- Content: {content}
+- Keywords: {keywords}
+
+Nearest neighbor memories:
+{nearest_neighbors_memories}
+
+Based on the relationships between the new memory and its neighbors, decide:
+- NO_EVOLUTION: The memory stands alone, no changes needed.
+- STRENGTHEN: The new memory should be linked to some neighbors and its tags updated.
+- UPDATE_NEIGHBOR: The neighbors' context/tags should be updated based on new understanding.
+- STRENGTHEN_AND_UPDATE: Both strengthen and update neighbors.
+
+Respond using EXACTLY this format:
+DECISION: <one of NO_EVOLUTION, STRENGTHEN, UPDATE_NEIGHBOR, STRENGTHEN_AND_UPDATE>
+REASON: <brief explanation>

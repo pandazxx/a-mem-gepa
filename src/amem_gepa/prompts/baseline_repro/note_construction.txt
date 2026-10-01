@@ -1,0 +1,13 @@
+Analyze the following content and provide:
+1. KEYWORDS: The most important keywords (nouns, verbs, key concepts). Order from most to least important. At least three keywords. Do not include speaker names or time references.
+2. CONTEXT: One sentence summarizing the main topic, key points, and purpose.
+3. TAGS: Broad categories/themes for classification (domain, format, type). At least three tags.
+
+Respond using EXACTLY this format (one section per header):
+
+KEYWORDS: keyword1, keyword2, keyword3, ...
+CONTEXT: A single sentence summarizing the content.
+TAGS: tag1, tag2, tag3, ...
+
+Content for analysis:
+{content}

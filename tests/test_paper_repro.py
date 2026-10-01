@@ -309,8 +309,8 @@ def test_run_k_sweep_writes_one_result_file_per_k(fake_repro_modules):
         results_dir=results_dir,
     )
 
-    assert (results_dir / "k_sweep" / "results_k10.json").exists()
-    assert (results_dir / "k_sweep" / "results_k20.json").exists()
+    assert (results_dir / "k_sweep" / "results_ollama_llama3.2:1b_k10.json").exists()
+    assert (results_dir / "k_sweep" / "results_ollama_llama3.2:1b_k20.json").exists()
 
 
 def test_run_k_sweep_resumes_from_an_existing_k_output_file(fake_repro_modules):
@@ -320,7 +320,7 @@ def test_run_k_sweep_resumes_from_an_existing_k_output_file(fake_repro_modules):
     sweep_dir = results_dir / "k_sweep"
     sweep_dir.mkdir(parents=True)
     sentinel = {"total_questions": 999, "aggregate_metrics": {"overall": {"f1": {"mean": 0.42}}}}
-    (sweep_dir / "results_k99.json").write_text(json.dumps(sentinel))
+    (sweep_dir / "results_ollama_llama3.2:1b_k99.json").write_text(json.dumps(sentinel))
 
     results_by_k = run_k_sweep(
         dataset_path=fake_repro_modules / "fake.json",
@@ -332,6 +332,40 @@ def test_run_k_sweep_resumes_from_an_existing_k_output_file(fake_repro_modules):
 
     assert results_by_k[99] == sentinel
     assert _FakeAgent.instances == [], "a resumed k must not re-run QA-answering at all"
+
+
+def test_run_k_sweep_does_not_reuse_another_models_cached_k_result(fake_repro_modules):
+    """Real bug hit on a live run: the per-k output filename used to be
+    just f"results_k{k}.json" -- no backend/model in it. Sweeping a second
+    model at the same k values silently loaded the *first* model's cached
+    result file and reported it as the second model's, no error, no
+    warning -- confirmed on a real run where two completely different
+    models (GPT-4o-mini and a local Ollama model) produced byte-identical
+    output."""
+    from amem_gepa.paper_repro import run_k_sweep
+
+    results_dir = fake_repro_modules / "results"
+    run_k_sweep(
+        dataset_path=fake_repro_modules / "fake.json",
+        backend="openai",
+        model="openai/gpt-4o-mini",
+        k_values=(40,),
+        results_dir=results_dir,
+    )
+    first_model_agent_count = len(_FakeAgent.instances)
+
+    results_by_k = run_k_sweep(
+        dataset_path=fake_repro_modules / "fake.json",
+        backend="ollama",
+        model="qwen3.5:9b",
+        k_values=(40,),
+        results_dir=results_dir,
+    )
+
+    second_model_agents = _FakeAgent.instances[first_model_agent_count:]
+    assert second_model_agents, "a different model at the same k must actually run, not load the first model's cache"
+    assert any(agent.answered for agent in second_model_agents)
+    assert results_by_k[40] is not None
 
 
 def test_format_k_sweep_summary_picks_best_overall_f1_and_breaks_down_by_category():
