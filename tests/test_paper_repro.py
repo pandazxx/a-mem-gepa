@@ -560,3 +560,92 @@ def test_format_spliced_summary_shows_k_per_category():
     assert "multi_hop" in out and " 40 " in out
     assert "open_domain" in out and " 50 " in out
     assert "overall" in out
+
+
+# ---------------------------------------------------------------------------
+# Progress tracing / ETA / diagnosis (added after a real run -- even on a
+# GPU upgrade that should comfortably fit the model -- took 3+ days on a
+# single k and gave zero visibility into whether it was progressing,
+# stalled, or just slow throughout).
+# ---------------------------------------------------------------------------
+
+import logging
+
+
+def test_format_duration_formats_various_magnitudes():
+    from amem_gepa.paper_repro import _format_duration
+
+    assert _format_duration(5) == "5s"
+    assert _format_duration(65) == "1m5s"
+    assert _format_duration(3665) == "1h1m"
+    assert _format_duration(90000) == "1d1h0m"
+
+
+def test_progress_tracker_avg_latency_excludes_cached_entries():
+    from amem_gepa.paper_repro import _ProgressTracker
+
+    tracker = _ProgressTracker(logging.getLogger("test"), "label", total_units=10)
+    tracker.record(0.0, cached=True)
+    tracker.record(0.0, cached=True)
+    tracker.record(10.0, cached=False)
+    tracker.record(20.0, cached=False)
+
+    assert tracker.cached_units == 2
+    assert tracker.completed_units == 4
+    assert tracker.avg_latency == pytest.approx(15.0), "cached (near-instant) entries must not drag the average down"
+
+
+def test_progress_tracker_eta_uses_avg_latency_times_remaining_units():
+    from amem_gepa.paper_repro import _ProgressTracker
+
+    tracker = _ProgressTracker(logging.getLogger("test"), "label", total_units=10)
+    for _ in range(4):
+        tracker.record(10.0, cached=False)
+
+    # 4/10 done at 10s/call avg -> 6 remaining -> ETA 60s
+    assert tracker.eta_seconds == pytest.approx(60.0)
+
+
+def test_progress_tracker_eta_is_none_before_any_real_call():
+    from amem_gepa.paper_repro import _ProgressTracker
+
+    tracker = _ProgressTracker(logging.getLogger("test"), "label", total_units=10)
+    assert tracker.eta_seconds is None
+    tracker.record(0.0, cached=True)  # a cache hit alone still shouldn't produce a fake ETA
+    assert tracker.eta_seconds is None
+
+
+def test_progress_tracker_outlier_detection_needs_warmup_then_flags_slow_calls():
+    from amem_gepa.paper_repro import _ProgressTracker
+
+    tracker = _ProgressTracker(logging.getLogger("test"), "label", total_units=100)
+    # Not enough real calls yet -- a lone slow first call shouldn't trip
+    # the detector against an average that's essentially just itself.
+    assert tracker.is_outlier(100.0) is False
+    tracker.record(100.0, cached=False)
+    assert tracker.is_outlier(100.0) is False  # still only 1 real call, under the 5-call warmup
+
+    # 4 more real calls at 10s each -> 5 total, avg = (100+10*4)/5 = 28s
+    for _ in range(4):
+        tracker.record(10.0, cached=False)
+    assert tracker.avg_latency == pytest.approx(28.0)
+    # a 50s call (< 3x the 28s avg) should not flag; a 100s call (> 3x) should.
+    assert tracker.is_outlier(50.0) is False
+    assert tracker.is_outlier(100.0) is True
+
+
+def test_progress_tracker_progress_line_includes_expected_fields():
+    from amem_gepa.paper_repro import _ProgressTracker
+
+    tracker = _ProgressTracker(logging.getLogger("test"), "QA-answering k=50", total_units=10)
+    tracker.record(5.0, cached=False)
+    tracker.record(0.0, cached=True)
+
+    line = tracker.progress_line(extra="sample=0 cat=5")
+
+    assert "QA-answering k=50: 2/10" in line
+    assert "1 cached" in line
+    assert "avg=5.0s" in line
+    assert "ETA=" in line
+    assert "elapsed=" in line
+    assert "sample=0 cat=5" in line

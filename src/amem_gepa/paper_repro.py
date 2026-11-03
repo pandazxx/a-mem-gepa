@@ -30,6 +30,7 @@ import json
 import logging
 import pickle
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -137,6 +138,95 @@ def _append_qa_progress(path: Path, record: dict) -> None:
         f.write(json.dumps(record) + "\n")
 
 
+def _format_duration(seconds: float) -> str:
+    """Human-readable duration for log lines (ETAs here are routinely
+    multi-day, per docs/decisions/0013's hardware notes, so plain
+    seconds aren't useful)."""
+    seconds = int(seconds)
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    if days:
+        return f"{days}d{hours}h{minutes}m"
+    if hours:
+        return f"{hours}h{minutes}m"
+    if minutes:
+        return f"{minutes}m{secs}s"
+    return f"{secs}s"
+
+
+class _ProgressTracker:
+    """Pure observability: tracks elapsed wall-clock time per unit of real
+    work (one memory-building turn, one QA-answering question) to log
+    throughput and an ETA. Added after a real run -- even after a GPU
+    upgrade that should have comfortably fit the model in VRAM -- still
+    took 3+ days on a single k and hadn't finished, with zero visibility
+    into whether it was actually progressing, stalled, or just slow
+    throughout. Doesn't change what gets computed, cached, or returned --
+    only what gets logged, wrapped around the existing calls.
+
+    Cache hits (an already-answered question resumed from
+    `_qa_progress_path`, or an already-swept k loaded from disk) are
+    recorded separately and excluded from the latency average -- they're
+    near-instant and would otherwise make the ETA look far rosier than
+    the real, uncached work remaining actually is.
+    """
+
+    def __init__(self, logger: logging.Logger, label: str, total_units: int):
+        self.logger = logger
+        self.label = label
+        self.total_units = total_units
+        self.completed_units = 0
+        self.cached_units = 0
+        self.last_elapsed: float | None = None
+        self._real_elapsed_total = 0.0
+        self._real_call_count = 0
+        self.start_time = time.monotonic()
+
+    def record(self, elapsed: float, cached: bool) -> None:
+        self.completed_units += 1
+        if cached:
+            self.cached_units += 1
+            return
+        self._real_elapsed_total += elapsed
+        self._real_call_count += 1
+        self.last_elapsed = elapsed
+
+    @property
+    def avg_latency(self) -> float | None:
+        return self._real_elapsed_total / self._real_call_count if self._real_call_count else None
+
+    @property
+    def eta_seconds(self) -> float | None:
+        avg = self.avg_latency
+        if avg is None:
+            return None
+        return avg * (self.total_units - self.completed_units)
+
+    def is_outlier(self, elapsed: float, factor: float = 3.0) -> bool:
+        # Needs a handful of real calls first so one slow cold-start call
+        # doesn't get flagged against an average of essentially itself.
+        avg = self.avg_latency
+        return avg is not None and self._real_call_count >= 5 and elapsed > avg * factor
+
+    def progress_line(self, extra: str | None = None) -> str:
+        bits = [f"{self.label}: {self.completed_units}/{self.total_units}"]
+        if self.cached_units:
+            bits.append(f"{self.cached_units} cached")
+        if self.last_elapsed is not None:
+            bits.append(f"last={self.last_elapsed:.1f}s")
+        avg = self.avg_latency
+        if avg is not None:
+            bits.append(f"avg={avg:.1f}s")
+        eta = self.eta_seconds
+        if eta is not None:
+            bits.append(f"ETA={_format_duration(eta)}")
+        bits.append(f"elapsed={_format_duration(time.monotonic() - self.start_time)}")
+        if extra:
+            bits.append(extra)
+        return " | ".join(bits)
+
+
 def run_full_reproduction(
     dataset_path: Path,
     backend: str,
@@ -197,6 +287,8 @@ def run_full_reproduction(
             f"Resuming QA-answering at k={retrieve_k}: {len(qa_progress)} questions already answered"
         )
 
+    qa_tracker = _ProgressTracker(eval_logger, f"QA-answering k={retrieve_k}", sum(len(s.qa) for s in samples))
+
     for sample_idx, sample in enumerate(samples):
         # RobustAdvancedMemAgent's own signature: (model, backend, retrieve_k,
         # temperature_c5, sglang_host=..., sglang_port=...) -- no api_base;
@@ -224,10 +316,22 @@ def run_full_reproduction(
             eval_logger.info(f"[{sample_idx}] loaded {len(cached_memories)} memories")
         else:
             eval_logger.info(f"[{sample_idx}] no cache -- replaying conversation")
+            total_turns_this_sample = sum(len(turns.turns) for _, turns in sample.conversation.sessions.items())
+            build_tracker = _ProgressTracker(eval_logger, f"[{sample_idx}] memory-build", total_turns_this_sample)
             for _, turns in sample.conversation.sessions.items():
                 for turn in turns.turns:
                     conversation_tmp = "Speaker " + turn.speaker + "says : " + turn.text
+                    call_start = time.monotonic()
                     agent.add_memory(conversation_tmp, time=turns.date_time)
+                    elapsed = time.monotonic() - call_start
+                    build_tracker.record(elapsed, cached=False)
+                    if build_tracker.is_outlier(elapsed):
+                        eval_logger.warning(
+                            f"[{sample_idx}] slow memory-build call: {elapsed:.1f}s "
+                            f"(running avg {build_tracker.avg_latency:.1f}s) -- "
+                            f"content_len={len(conversation_tmp)}"
+                        )
+                    eval_logger.info(build_tracker.progress_line())
 
             with open(memory_cache_file, "wb") as f:
                 pickle.dump(agent.memory_system.memories, f)
@@ -244,10 +348,13 @@ def run_full_reproduction(
             if cached is not None:
                 prediction = cached["prediction"]
                 metrics = cached["metrics"]
+                qa_tracker.record(0.0, cached=True)
             else:
+                call_start = time.monotonic()
                 prediction, user_prompt, raw_context = agent.answer_question(
                     qa.question, qa.category, qa.final_answer
                 )
+                elapsed = time.monotonic() - call_start
                 prediction = parse_plain_text_answer(prediction)
 
                 metrics = (
@@ -259,6 +366,21 @@ def run_full_reproduction(
                         "bleu4": 0.0, "bert_f1": 0.0, "meteor": 0.0, "sbert_similarity": 0.0,
                     }
                 )
+
+                qa_tracker.record(elapsed, cached=False)
+                if qa_tracker.is_outlier(elapsed):
+                    # context_len is the diagnostic that matters most at high
+                    # k: a bigger retrieved context means a bigger prompt on
+                    # every single call, since there's no shared-prefix KV
+                    # reuse across different questions' different top-k sets
+                    # -- this is the field to check if slow calls correlate
+                    # with large k rather than a stalled/misbehaving backend.
+                    eval_logger.warning(
+                        f"[{sample_idx}:{q_idx}] slow QA call: {elapsed:.1f}s "
+                        f"(running avg {qa_tracker.avg_latency:.1f}s) -- "
+                        f"category={qa.category} context_len={len(raw_context) if raw_context else 0} "
+                        f"response_len={len(prediction) if prediction else 0}"
+                    )
 
             all_metrics.append(metrics)
             all_categories.append(qa.category)
@@ -274,8 +396,7 @@ def run_full_reproduction(
             results.append(record)
             if cached is None:
                 _append_qa_progress(progress_path, record)
-            if total_questions % 25 == 0:
-                eval_logger.info(f"Processed {total_questions} questions")
+            eval_logger.info(qa_tracker.progress_line(extra=f"sample={sample_idx} cat={qa.category}"))
 
     aggregate_results = aggregate_metrics(all_metrics, all_categories)
 
@@ -343,6 +464,7 @@ def run_k_sweep(
     sweep_dir.mkdir(parents=True, exist_ok=True)
     eval_logger = logging.getLogger("amem_gepa.paper_repro")
 
+    sweep_tracker = _ProgressTracker(eval_logger, "[k-sweep]", len(k_values))
     results_by_k: dict[int, dict] = {}
     for k in k_values:
         # Real bug hit on a live run: this filename used to be just
@@ -358,9 +480,14 @@ def run_k_sweep(
         if out_file.exists():
             eval_logger.info(f"[k-sweep] k={k} already computed for {backend}/{model} -- loading {out_file}")
             results_by_k[k] = json.loads(out_file.read_text())
+            sweep_tracker.record(0.0, cached=True)
             continue
 
-        eval_logger.info(f"[k-sweep] running retrieve_k={k}")
+        eval_logger.info(
+            f"[k-sweep] running retrieve_k={k} ({sweep_tracker.completed_units + 1}/{len(k_values)}) -- "
+            f"see per-question logging below for this k's own progress/ETA"
+        )
+        k_start = time.monotonic()
         result = run_full_reproduction(
             dataset_path=dataset_path,
             backend=backend,
@@ -370,11 +497,14 @@ def run_k_sweep(
             temperature_c5=temperature_c5,
             results_dir=results_dir,
         )
+        k_elapsed = time.monotonic() - k_start
+        sweep_tracker.record(k_elapsed, cached=False)
         # Same "/" in model" nested-directory consequence as
         # _append_qa_progress hit (d71f798) -- mkdir before writing.
         out_file.parent.mkdir(parents=True, exist_ok=True)
         out_file.write_text(json.dumps(result, indent=2))
         results_by_k[k] = result
+        eval_logger.info(f"[k-sweep] k={k} finished in {_format_duration(k_elapsed)} -- {sweep_tracker.progress_line()}")
 
     return results_by_k
 
