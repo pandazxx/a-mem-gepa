@@ -649,3 +649,154 @@ def test_progress_tracker_progress_line_includes_expected_fields():
     assert "ETA=" in line
     assert "elapsed=" in line
     assert "sample=0 cat=5" in line
+
+
+# ---------------------------------------------------------------------------
+# Ollama per-call timing breakdown (added after a live diagnosis session:
+# a verbose `ollama run` benchmark on the exact machine running a slow
+# sweep showed ~73% of one request's total_duration wasn't accounted for
+# by Ollama's own load+prompt_eval+eval breakdown, with GPU contention
+# ruled out -- `_ProgressTracker`'s own `elapsed` can't say whether slow
+# calls are prefill-bound, eval-bound, or something else, so this pulls
+# Ollama's own per-call breakdown through the monkeypatch instead of
+# editing the vendored RobustOllamaController, which discards it).
+# ---------------------------------------------------------------------------
+
+
+def test_ns_to_s_converts_nanoseconds_and_passes_through_none():
+    from amem_gepa.paper_repro import _ns_to_s
+
+    assert _ns_to_s(5_000_000_000) == pytest.approx(5.0)
+    assert _ns_to_s(0) == pytest.approx(0.0)
+    assert _ns_to_s(None) is None
+
+
+def test_summarize_ollama_calls_returns_none_for_empty_list():
+    from amem_gepa.paper_repro import _summarize_ollama_calls
+
+    assert _summarize_ollama_calls([]) is None
+
+
+def test_summarize_ollama_calls_aggregates_across_multiple_calls():
+    from amem_gepa.paper_repro import _summarize_ollama_calls
+
+    # Two ollama.chat() calls, e.g. keyword-generation then the answer
+    # itself (answer_question() makes exactly this pair).
+    calls = [
+        {
+            "wall_elapsed": 10.0, "total_duration": 8.0, "load_duration": 0.1,
+            "prompt_eval_count": 20, "prompt_eval_duration": 1.0,
+            "eval_count": 15, "eval_duration": 3.0,
+        },
+        {
+            "wall_elapsed": 90.0, "total_duration": 60.0, "load_duration": 0.0,
+            "prompt_eval_count": 1500, "prompt_eval_duration": 8.0,
+            "eval_count": 200, "eval_duration": 5.0,
+        },
+    ]
+
+    summary = _summarize_ollama_calls(calls)
+
+    assert "2 call(s)" in summary
+    assert "wall=100.0s" in summary  # 10.0 + 90.0
+    assert "reported=68.0s" in summary  # 8.0 + 60.0
+    assert "prompt=1520tok/9.0s" in summary  # (20+1500)tok, (1.0+8.0)s
+    assert "eval=215tok/8.0s" in summary  # (15+200)tok, (3.0+5.0)s
+    assert "unaccounted=32.0s" in summary  # wall(100) - reported(68)
+
+
+def test_summarize_ollama_calls_handles_missing_fields_as_zero():
+    from amem_gepa.paper_repro import _summarize_ollama_calls
+
+    # A call where Ollama didn't report some fields (e.g. total_duration
+    # None) must not crash the aggregation -- treat as 0, not fail.
+    calls = [{
+        "wall_elapsed": 5.0, "total_duration": None, "load_duration": None,
+        "prompt_eval_count": None, "prompt_eval_duration": None,
+        "eval_count": None, "eval_duration": None,
+    }]
+
+    summary = _summarize_ollama_calls(calls)
+
+    assert "wall=5.0s" in summary
+    assert "reported=0.0s" in summary
+    assert "unaccounted=5.0s" in summary
+
+
+def test_patch_ollama_chat_for_timing_captures_fields_and_preserves_return_value(monkeypatch):
+    fake_ollama = types.ModuleType("ollama")
+    call_log = []
+
+    class _FakeResponse(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+    def fake_chat(*args, **kwargs):
+        call_log.append(kwargs)
+        return _FakeResponse({
+            "message": {"content": "the answer"},
+            "total_duration": 5_000_000_000,
+            "load_duration": 100_000_000,
+            "prompt_eval_count": 50,
+            "prompt_eval_duration": 1_000_000_000,
+            "eval_count": 20,
+            "eval_duration": 2_000_000_000,
+        })
+
+    fake_ollama.chat = fake_chat
+    monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
+
+    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat_for_timing
+
+    _ollama_call_stats.clear()
+    _patch_ollama_chat_for_timing()
+
+    import ollama
+    response = ollama.chat(model="qwen3.5:9b", messages=[{"role": "user", "content": "hi"}])
+
+    # The wrapper must not change the caller-visible behavior at all --
+    # RobustOllamaController.get_completion only ever reads this field.
+    assert response["message"]["content"] == "the answer"
+    assert call_log == [{"model": "qwen3.5:9b", "messages": [{"role": "user", "content": "hi"}]}]
+
+    assert len(_ollama_call_stats) == 1
+    stat = _ollama_call_stats[0]
+    assert stat["total_duration"] == pytest.approx(5.0)
+    assert stat["prompt_eval_count"] == 50
+    assert stat["prompt_eval_duration"] == pytest.approx(1.0)
+    assert stat["eval_count"] == 20
+    assert stat["eval_duration"] == pytest.approx(2.0)
+    assert stat["wall_elapsed"] >= 0.0
+
+    _ollama_call_stats.clear()
+
+
+def test_patch_ollama_chat_for_timing_is_idempotent(monkeypatch):
+    fake_ollama = types.ModuleType("ollama")
+    call_count = 0
+
+    class _FakeResponse(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+    def fake_chat(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return _FakeResponse({"message": {"content": "hi"}})
+
+    fake_ollama.chat = fake_chat
+    monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
+
+    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat_for_timing
+
+    _ollama_call_stats.clear()
+    _patch_ollama_chat_for_timing()
+    _patch_ollama_chat_for_timing()  # second call must not double-wrap
+
+    import ollama
+    ollama.chat(model="x", messages=[])
+
+    assert call_count == 1, "double-wrapping would call the underlying fake_chat more than once per call"
+    assert len(_ollama_call_stats) == 1, "double-wrapping would record two entries for one chat() call"
+
+    _ollama_call_stats.clear()

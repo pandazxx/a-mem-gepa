@@ -227,6 +227,97 @@ class _ProgressTracker:
         return " | ".join(bits)
 
 
+# ---------------------------------------------------------------------------
+# Ollama per-call timing breakdown (backend="ollama" only)
+# ---------------------------------------------------------------------------
+#
+# Added after a real diagnosis session: `_ProgressTracker`'s own `elapsed`
+# only measures OUR wall-clock around `agent.answer_question()`, which
+# doesn't say whether that time is prompt prefill, generation, or
+# something else entirely -- and a live `ollama run --verbose` benchmark
+# on the exact machine running the slow sweep showed ~73% of one request's
+# total_duration wasn't accounted for by Ollama's own
+# load+prompt_eval+eval breakdown either, with GPU contention from the
+# sweep itself ruled out (confirmed nothing else was running). The
+# vendored `RobustOllamaController.get_completion`
+# (external/agentic-memory-repro/memory_layer_robust.py, read-only) calls
+# `ollama.chat()` and keeps only `response["message"]["content"]`,
+# discarding the detailed timing fields the Ollama API actually returns
+# (`total_duration`/`load_duration`/`prompt_eval_count`/
+# `prompt_eval_duration`/`eval_count`/`eval_duration`, all in
+# nanoseconds -- confirmed against the installed `ollama` package's
+# `ChatResponse`/`SubscriptableBaseModel`, which supports `.get()` safely
+# even for an unset field).
+#
+# Rather than editing that vendored file, monkeypatch `ollama.chat` itself
+# (the third-party package, not the submodule) to capture this detail on
+# the way through, without changing its behavior or return value at all.
+# `from ollama import chat` inside `get_completion` re-resolves
+# `ollama.chat` on every call (it's a function-local import, not a
+# module-load-time one), so patching the attribute before that line runs
+# is picked up transparently.
+
+_ollama_call_stats: list[dict] = []
+
+
+def _ns_to_s(ns) -> float | None:
+    return ns / 1e9 if ns is not None else None
+
+
+def _patch_ollama_chat_for_timing() -> None:
+    """Idempotent -- safe to call on every run_full_reproduction call
+    (e.g. once per k-sweep value). No-op the second time onward."""
+    import ollama
+
+    if getattr(ollama.chat, "_amem_gepa_instrumented", False):
+        return
+
+    original_chat = ollama.chat
+
+    def _instrumented_chat(*args, **kwargs):
+        call_start = time.monotonic()
+        response = original_chat(*args, **kwargs)
+        wall_elapsed = time.monotonic() - call_start
+        _ollama_call_stats.append(
+            {
+                "wall_elapsed": wall_elapsed,
+                "total_duration": _ns_to_s(response.get("total_duration")),
+                "load_duration": _ns_to_s(response.get("load_duration")),
+                "prompt_eval_count": response.get("prompt_eval_count"),
+                "prompt_eval_duration": _ns_to_s(response.get("prompt_eval_duration")),
+                "eval_count": response.get("eval_count"),
+                "eval_duration": _ns_to_s(response.get("eval_duration")),
+            }
+        )
+        return response
+
+    _instrumented_chat._amem_gepa_instrumented = True
+    ollama.chat = _instrumented_chat
+
+
+def _summarize_ollama_calls(calls: list[dict]) -> str | None:
+    """Compact one-line summary for a question's/turn's Ollama call(s) --
+    `answer_question()` makes 2 (keyword generation, then the answer
+    itself), memory-building's add_note makes 1-4 depending on whether
+    evolution fires. Returns None (nothing to append) when empty, e.g. for
+    a non-ollama backend, where the monkeypatch above is never installed
+    so nothing is ever recorded."""
+    if not calls:
+        return None
+    wall = sum(c["wall_elapsed"] for c in calls)
+    reported = sum(c["total_duration"] or 0.0 for c in calls)
+    prompt_tokens = sum(c["prompt_eval_count"] or 0 for c in calls)
+    prompt_time = sum(c["prompt_eval_duration"] or 0.0 for c in calls)
+    eval_tokens = sum(c["eval_count"] or 0 for c in calls)
+    eval_time = sum(c["eval_duration"] or 0.0 for c in calls)
+    unaccounted = wall - reported
+    return (
+        f"ollama[{len(calls)} call(s)]: wall={wall:.1f}s reported={reported:.1f}s "
+        f"prompt={prompt_tokens}tok/{prompt_time:.1f}s eval={eval_tokens}tok/{eval_time:.1f}s "
+        f"unaccounted={unaccounted:.1f}s"
+    )
+
+
 def run_full_reproduction(
     dataset_path: Path,
     backend: str,
@@ -249,6 +340,8 @@ def run_full_reproduction(
     """
     ensure_repro_repo_importable()
     ensure_nltk_data()
+    if backend == "ollama":
+        _patch_ollama_chat_for_timing()
 
     # Imported here, not at module level: importing test_advanced_robust
     # eagerly loads a SentenceTransformer model and does NLTK downloads at
@@ -321,17 +414,20 @@ def run_full_reproduction(
             for _, turns in sample.conversation.sessions.items():
                 for turn in turns.turns:
                     conversation_tmp = "Speaker " + turn.speaker + "says : " + turn.text
+                    _ollama_call_stats.clear()
                     call_start = time.monotonic()
                     agent.add_memory(conversation_tmp, time=turns.date_time)
                     elapsed = time.monotonic() - call_start
+                    ollama_calls = list(_ollama_call_stats)
                     build_tracker.record(elapsed, cached=False)
                     if build_tracker.is_outlier(elapsed):
+                        extra = f" -- {_summarize_ollama_calls(ollama_calls)}" if ollama_calls else ""
                         eval_logger.warning(
                             f"[{sample_idx}] slow memory-build call: {elapsed:.1f}s "
                             f"(running avg {build_tracker.avg_latency:.1f}s) -- "
-                            f"content_len={len(conversation_tmp)}"
+                            f"content_len={len(conversation_tmp)}{extra}"
                         )
-                    eval_logger.info(build_tracker.progress_line())
+                    eval_logger.info(build_tracker.progress_line(extra=_summarize_ollama_calls(ollama_calls)))
 
             with open(memory_cache_file, "wb") as f:
                 pickle.dump(agent.memory_system.memories, f)
@@ -345,16 +441,19 @@ def run_full_reproduction(
             category_counts[qa.category] += 1
 
             cached = qa_progress.get((sample_idx, q_idx))
+            ollama_calls: list[dict] = []
             if cached is not None:
                 prediction = cached["prediction"]
                 metrics = cached["metrics"]
                 qa_tracker.record(0.0, cached=True)
             else:
+                _ollama_call_stats.clear()
                 call_start = time.monotonic()
                 prediction, user_prompt, raw_context = agent.answer_question(
                     qa.question, qa.category, qa.final_answer
                 )
                 elapsed = time.monotonic() - call_start
+                ollama_calls = list(_ollama_call_stats)
                 prediction = parse_plain_text_answer(prediction)
 
                 metrics = (
@@ -375,11 +474,18 @@ def run_full_reproduction(
                     # reuse across different questions' different top-k sets
                     # -- this is the field to check if slow calls correlate
                     # with large k rather than a stalled/misbehaving backend.
+                    # ollama_summary adds the actual prefill/eval timing
+                    # breakdown for backend="ollama" (see
+                    # _patch_ollama_chat_for_timing), since a live diagnosis
+                    # found `elapsed` alone can't tell prefill-bound from
+                    # eval-bound from genuinely-unaccounted-for time.
+                    ollama_summary = _summarize_ollama_calls(ollama_calls)
+                    extra = f" -- {ollama_summary}" if ollama_summary else ""
                     eval_logger.warning(
                         f"[{sample_idx}:{q_idx}] slow QA call: {elapsed:.1f}s "
                         f"(running avg {qa_tracker.avg_latency:.1f}s) -- "
                         f"category={qa.category} context_len={len(raw_context) if raw_context else 0} "
-                        f"response_len={len(prediction) if prediction else 0}"
+                        f"response_len={len(prediction) if prediction else 0}{extra}"
                     )
 
             all_metrics.append(metrics)
@@ -396,7 +502,11 @@ def run_full_reproduction(
             results.append(record)
             if cached is None:
                 _append_qa_progress(progress_path, record)
-            eval_logger.info(qa_tracker.progress_line(extra=f"sample={sample_idx} cat={qa.category}"))
+            progress_extra = f"sample={sample_idx} cat={qa.category}"
+            ollama_summary = _summarize_ollama_calls(ollama_calls)
+            if ollama_summary:
+                progress_extra = f"{progress_extra} | {ollama_summary}"
+            eval_logger.info(qa_tracker.progress_line(extra=progress_extra))
 
     aggregate_results = aggregate_metrics(all_metrics, all_categories)
 
