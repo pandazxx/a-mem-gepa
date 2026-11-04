@@ -767,8 +767,70 @@ def test_patch_ollama_chat_for_timing_captures_fields_and_preserves_return_value
     assert stat["eval_count"] == 20
     assert stat["eval_duration"] == pytest.approx(2.0)
     assert stat["wall_elapsed"] >= 0.0
+    assert stat["content_preview"] == "the answer"
 
     _ollama_call_stats.clear()
+
+
+def test_patch_ollama_chat_for_timing_truncates_long_content_preview(monkeypatch):
+    """Real diagnosis finding: token counts alone could only suggest a
+    call generated far more than a short structured task should need --
+    the actual text (e.g. a visible `<think>...` reasoning block) is what
+    confirms why. Capped at 80 chars so a multi-thousand-token response
+    doesn't blow up the log line; newlines flattened so the preview stays
+    on one line."""
+    fake_ollama = types.ModuleType("ollama")
+
+    class _FakeResponse(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+    long_content = "<think>\nOkay, let me reason through this step by step. " + "x" * 200
+
+    def fake_chat(*args, **kwargs):
+        return _FakeResponse({"message": {"content": long_content}})
+
+    fake_ollama.chat = fake_chat
+    monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
+
+    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat_for_timing
+
+    _ollama_call_stats.clear()
+    _patch_ollama_chat_for_timing()
+
+    import ollama
+    ollama.chat(model="x", messages=[])
+
+    preview = _ollama_call_stats[0]["content_preview"]
+    assert len(preview) <= 82, "truncated to 80 raw chars, plus at most one \\n -> \\\\n expansion"
+    assert "\n" not in preview
+    assert preview.startswith("<think>\\nOkay, let me reason")
+
+    _ollama_call_stats.clear()
+
+
+def test_summarize_ollama_calls_includes_content_previews():
+    from amem_gepa.paper_repro import _summarize_ollama_calls
+
+    calls = [
+        {
+            "wall_elapsed": 1.0, "total_duration": 1.0, "load_duration": 0.0,
+            "prompt_eval_count": 10, "prompt_eval_duration": 0.1,
+            "eval_count": 5, "eval_duration": 0.9,
+            "content_preview": "keywords, context, tags",
+        },
+        {
+            "wall_elapsed": 2.0, "total_duration": 2.0, "load_duration": 0.0,
+            "prompt_eval_count": 20, "prompt_eval_duration": 0.2,
+            "eval_count": 500, "eval_duration": 1.8,
+            "content_preview": "<think>\\nOkay so the user wants",
+        },
+    ]
+
+    summary = _summarize_ollama_calls(calls)
+
+    assert '[0]"keywords, context, tags"' in summary
+    assert '[1]"<think>\\nOkay so the user wants"' in summary
 
 
 def test_patch_ollama_chat_for_timing_is_idempotent(monkeypatch):

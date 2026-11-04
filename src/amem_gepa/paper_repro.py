@@ -278,6 +278,16 @@ def _patch_ollama_chat_for_timing() -> None:
         call_start = time.monotonic()
         response = original_chat(*args, **kwargs)
         wall_elapsed = time.monotonic() - call_start
+        # content_preview: token counts alone can only suggest "this
+        # generated way more than a short structured extraction/decision
+        # should need" -- a short preview of the actual text directly
+        # confirms (or rules out) *why*, e.g. a visible `<think>...`
+        # reasoning block from a thinking-mode model the vendored
+        # RobustOllamaController never disables (it only ever sets
+        # `temperature` in `options`; `ollama.chat()`'s own `think`
+        # parameter is left at the model's default).
+        message = response.get("message") or {}
+        content = message.get("content") or ""
         _ollama_call_stats.append(
             {
                 "wall_elapsed": wall_elapsed,
@@ -287,6 +297,7 @@ def _patch_ollama_chat_for_timing() -> None:
                 "prompt_eval_duration": _ns_to_s(response.get("prompt_eval_duration")),
                 "eval_count": response.get("eval_count"),
                 "eval_duration": _ns_to_s(response.get("eval_duration")),
+                "content_preview": content[:80].replace("\n", "\\n"),
             }
         )
         return response
@@ -311,10 +322,14 @@ def _summarize_ollama_calls(calls: list[dict]) -> str | None:
     eval_tokens = sum(c["eval_count"] or 0 for c in calls)
     eval_time = sum(c["eval_duration"] or 0.0 for c in calls)
     unaccounted = wall - reported
+    previews = " ".join(
+        f'[{i}]"{c["content_preview"]}"' for i, c in enumerate(calls) if c.get("content_preview")
+    )
+    preview_suffix = f" previews: {previews}" if previews else ""
     return (
         f"ollama[{len(calls)} call(s)]: wall={wall:.1f}s reported={reported:.1f}s "
         f"prompt={prompt_tokens}tok/{prompt_time:.1f}s eval={eval_tokens}tok/{eval_time:.1f}s "
-        f"unaccounted={unaccounted:.1f}s"
+        f"unaccounted={unaccounted:.1f}s{preview_suffix}"
     )
 
 
