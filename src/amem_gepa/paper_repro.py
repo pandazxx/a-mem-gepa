@@ -217,7 +217,12 @@ class _ProgressTracker:
             bits.append(f"last={self.last_elapsed:.1f}s")
         avg = self.avg_latency
         if avg is not None:
-            bits.append(f"avg={avg:.1f}s")
+            # n=<count> makes the ETA's confidence self-evident -- a real
+            # run showed the ETA swing from ~8h to >1d within a handful of
+            # log lines, which is correct behavior (a running average over
+            # very few real samples is naturally volatile), not a bug, but
+            # wasn't obvious without seeing how many samples it was based on.
+            bits.append(f"avg={avg:.1f}s(n={self._real_call_count})")
         eta = self.eta_seconds
         if eta is not None:
             bits.append(f"ETA={_format_duration(eta)}")
@@ -278,14 +283,17 @@ def _patch_ollama_chat_for_timing() -> None:
         call_start = time.monotonic()
         response = original_chat(*args, **kwargs)
         wall_elapsed = time.monotonic() - call_start
-        # content_preview: token counts alone can only suggest "this
-        # generated way more than a short structured extraction/decision
-        # should need" -- a short preview of the actual text directly
-        # confirms (or rules out) *why*, e.g. a visible `<think>...`
-        # reasoning block from a thinking-mode model the vendored
-        # RobustOllamaController never disables (it only ever sets
-        # `temperature` in `options`; `ollama.chat()`'s own `think`
-        # parameter is left at the model's default).
+        # content_preview/content_tail: token counts alone can only suggest
+        # "this generated way more than a short structured extraction/
+        # decision should need" -- the actual text directly confirms (or
+        # rules out) *why*. A live run's head-only previews showed a
+        # perfectly normal, short-looking start ("Keywords: Audrey, dogs,
+        # games, park") for calls that still generated thousands of eval
+        # tokens -- no `<think>` block, so whatever's happening keeps
+        # generating *after* a reasonable-looking answer rather than
+        # reasoning *before* it. The tail is what actually shows that:
+        # trailing repetition/looping reads very differently from a
+        # coherent, intentionally long continuation.
         message = response.get("message") or {}
         content = message.get("content") or ""
         _ollama_call_stats.append(
@@ -297,7 +305,9 @@ def _patch_ollama_chat_for_timing() -> None:
                 "prompt_eval_duration": _ns_to_s(response.get("prompt_eval_duration")),
                 "eval_count": response.get("eval_count"),
                 "eval_duration": _ns_to_s(response.get("eval_duration")),
+                "content_len": len(content),
                 "content_preview": content[:80].replace("\n", "\\n"),
+                "content_tail": content[-80:].replace("\n", "\\n") if len(content) > 80 else "",
             }
         )
         return response
@@ -322,9 +332,22 @@ def _summarize_ollama_calls(calls: list[dict]) -> str | None:
     eval_tokens = sum(c["eval_count"] or 0 for c in calls)
     eval_time = sum(c["eval_duration"] or 0.0 for c in calls)
     unaccounted = wall - reported
-    previews = " ".join(
-        f'[{i}]"{c["content_preview"]}"' for i, c in enumerate(calls) if c.get("content_preview")
-    )
+
+    def _call_preview(i: int, c: dict) -> str:
+        head = c.get("content_preview")
+        if not head:
+            return ""
+        length = c.get("content_len")
+        bits = [f"[{i}]"]
+        if length is not None:
+            bits.append(f"(len={length})")
+        bits.append(f'head="{head}"')
+        tail = c.get("content_tail")
+        if tail:
+            bits.append(f'tail="{tail}"')
+        return " ".join(bits)
+
+    previews = " ".join(p for p in (_call_preview(i, c) for i, c in enumerate(calls)) if p)
     preview_suffix = f" previews: {previews}" if previews else ""
     return (
         f"ollama[{len(calls)} call(s)]: wall={wall:.1f}s reported={reported:.1f}s "

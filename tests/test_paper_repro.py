@@ -651,6 +651,23 @@ def test_progress_tracker_progress_line_includes_expected_fields():
     assert "sample=0 cat=5" in line
 
 
+def test_progress_tracker_progress_line_shows_real_sample_count_for_eta_confidence():
+    """Real UX finding: a live run's ETA swung from ~8h to >1d within a
+    handful of log lines -- correct behavior (a running average over very
+    few real samples is volatile), not a bug, but confusing without
+    visibility into how many samples it was based on."""
+    from amem_gepa.paper_repro import _ProgressTracker
+
+    tracker = _ProgressTracker(logging.getLogger("test"), "label", total_units=100)
+    tracker.record(10.0, cached=False)
+    tracker.record(0.0, cached=True)  # cached entries must not count toward n
+    tracker.record(20.0, cached=False)
+
+    line = tracker.progress_line()
+
+    assert "avg=15.0s(n=2)" in line
+
+
 # ---------------------------------------------------------------------------
 # Ollama per-call timing breakdown (added after a live diagnosis session:
 # a verbose `ollama run` benchmark on the exact machine running a slow
@@ -806,6 +823,39 @@ def test_patch_ollama_chat_for_timing_truncates_long_content_preview(monkeypatch
     assert "\n" not in preview
     assert preview.startswith("<think>\\nOkay, let me reason")
 
+    stat = _ollama_call_stats[0]
+    assert stat["content_len"] == len(long_content)
+    assert stat["content_tail"] == long_content[-80:]
+
+    _ollama_call_stats.clear()
+
+
+def test_patch_ollama_chat_for_timing_omits_tail_for_short_content(monkeypatch):
+    """A response short enough to fit entirely in the head preview (<=80
+    chars) has nothing new to show in a tail -- must be empty, not a
+    duplicate of the head."""
+    fake_ollama = types.ModuleType("ollama")
+
+    class _FakeResponse(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+    def fake_chat(*args, **kwargs):
+        return _FakeResponse({"message": {"content": "Keywords: Audrey, dogs, games, park"}})
+
+    fake_ollama.chat = fake_chat
+    monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
+
+    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat_for_timing
+
+    _ollama_call_stats.clear()
+    _patch_ollama_chat_for_timing()
+
+    import ollama
+    ollama.chat(model="x", messages=[])
+
+    assert _ollama_call_stats[0]["content_tail"] == ""
+
     _ollama_call_stats.clear()
 
 
@@ -817,20 +867,25 @@ def test_summarize_ollama_calls_includes_content_previews():
             "wall_elapsed": 1.0, "total_duration": 1.0, "load_duration": 0.0,
             "prompt_eval_count": 10, "prompt_eval_duration": 0.1,
             "eval_count": 5, "eval_duration": 0.9,
-            "content_preview": "keywords, context, tags",
+            "content_len": 24, "content_preview": "keywords, context, tags", "content_tail": "",
         },
         {
             "wall_elapsed": 2.0, "total_duration": 2.0, "load_duration": 0.0,
             "prompt_eval_count": 20, "prompt_eval_duration": 0.2,
             "eval_count": 500, "eval_duration": 1.8,
-            "content_preview": "<think>\\nOkay so the user wants",
+            "content_len": 3000, "content_preview": "<think>\\nOkay so the user wants",
+            "content_tail": "...and that concludes my reasoning, so the answer is 42.",
         },
     ]
 
     summary = _summarize_ollama_calls(calls)
 
-    assert '[0]"keywords, context, tags"' in summary
-    assert '[1]"<think>\\nOkay so the user wants"' in summary
+    assert '[0] (len=24) head="keywords, context, tags"' in summary
+    assert '[1] (len=3000) head="<think>\\nOkay so the user wants"' in summary
+    assert 'tail="...and that concludes my reasoning, so the answer is 42."' in summary
+    assert "tail=" not in summary.split("[1]")[0], (
+        "call 0 had no tail (short content) -- must not show an empty tail=\"\" segment"
+    )
 
 
 def test_patch_ollama_chat_for_timing_is_idempotent(monkeypatch):
