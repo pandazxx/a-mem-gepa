@@ -233,18 +233,13 @@ class _ProgressTracker:
 
 
 # ---------------------------------------------------------------------------
-# Ollama per-call timing breakdown (backend="ollama" only)
+# Ollama per-call timing breakdown + thinking-mode override (backend="ollama" only)
 # ---------------------------------------------------------------------------
 #
-# Added after a real diagnosis session: `_ProgressTracker`'s own `elapsed`
-# only measures OUR wall-clock around `agent.answer_question()`, which
-# doesn't say whether that time is prompt prefill, generation, or
-# something else entirely -- and a live `ollama run --verbose` benchmark
-# on the exact machine running the slow sweep showed ~73% of one request's
-# total_duration wasn't accounted for by Ollama's own
-# load+prompt_eval+eval breakdown either, with GPU contention from the
-# sweep itself ruled out (confirmed nothing else was running). The
-# vendored `RobustOllamaController.get_completion`
+# Added after a real diagnosis session (docs/decisions/0016): `_ProgressTracker`'s
+# own `elapsed` only measures OUR wall-clock around `agent.answer_question()`,
+# which doesn't say whether that time is prompt prefill, generation, or
+# something else entirely. The vendored `RobustOllamaController.get_completion`
 # (external/agentic-memory-repro/memory_layer_robust.py, read-only) calls
 # `ollama.chat()` and keeps only `response["message"]["content"]`,
 # discarding the detailed timing fields the Ollama API actually returns
@@ -254,13 +249,26 @@ class _ProgressTracker:
 # `ChatResponse`/`SubscriptableBaseModel`, which supports `.get()` safely
 # even for an unset field).
 #
+# That logging led to the actual root cause (docs/decisions/0016): `ollama
+# show qwen3.5:9b` reports `thinking: default true` -- the model generates
+# an extended reasoning block before every answer unless told not to, and
+# the vendored get_completion never passes Ollama's own `think` parameter
+# (confirmed in the installed `ollama` package's `chat()` signature) to
+# turn it off. A live side-by-side comparison on the same prompt: default
+# (thinking on) used 1,115 eval tokens / 15.3s for a short keyword
+# extraction; `think=False` used 11 eval tokens / 0.1s for a functionally
+# identical answer. None of the paper's six originally-benchmarked models
+# (GPT-4o-mini/GPT-4o/Qwen2.5-1.5b/3b/Llama-3.2-1b/3b) are reasoning
+# models, so disabling thinking for qwen3.5:9b keeps this comparison
+# faithful to the paper's own fast-instruction-following methodology
+# rather than introducing a deviation.
+#
 # Rather than editing that vendored file, monkeypatch `ollama.chat` itself
-# (the third-party package, not the submodule) to capture this detail on
-# the way through, without changing its behavior or return value at all.
-# `from ollama import chat` inside `get_completion` re-resolves
-# `ollama.chat` on every call (it's a function-local import, not a
-# module-load-time one), so patching the attribute before that line runs
-# is picked up transparently.
+# (the third-party package, not the submodule) to capture timing detail
+# AND force `think=False` on the way through. `from ollama import chat`
+# inside `get_completion` re-resolves `ollama.chat` on every call (it's a
+# function-local import, not a module-load-time one), so patching the
+# attribute before that line runs is picked up transparently.
 
 _ollama_call_stats: list[dict] = []
 
@@ -269,7 +277,7 @@ def _ns_to_s(ns) -> float | None:
     return ns / 1e9 if ns is not None else None
 
 
-def _patch_ollama_chat_for_timing() -> None:
+def _patch_ollama_chat() -> None:
     """Idempotent -- safe to call on every run_full_reproduction call
     (e.g. once per k-sweep value). No-op the second time onward."""
     import ollama
@@ -280,6 +288,12 @@ def _patch_ollama_chat_for_timing() -> None:
     original_chat = ollama.chat
 
     def _instrumented_chat(*args, **kwargs):
+        # setdefault, not an unconditional override: the vendored code
+        # never passes `think` today, so this is the only thing that
+        # changes in practice, but a future/different caller that does
+        # pass it explicitly has its choice respected rather than
+        # silently fought.
+        kwargs.setdefault("think", False)
         call_start = time.monotonic()
         response = original_chat(*args, **kwargs)
         wall_elapsed = time.monotonic() - call_start
@@ -379,7 +393,7 @@ def run_full_reproduction(
     ensure_repro_repo_importable()
     ensure_nltk_data()
     if backend == "ollama":
-        _patch_ollama_chat_for_timing()
+        _patch_ollama_chat()
 
     # Imported here, not at module level: importing test_advanced_robust
     # eagerly loads a SentenceTransformer model and does NLTK downloads at
@@ -513,10 +527,10 @@ def run_full_reproduction(
                     # -- this is the field to check if slow calls correlate
                     # with large k rather than a stalled/misbehaving backend.
                     # ollama_summary adds the actual prefill/eval timing
-                    # breakdown for backend="ollama" (see
-                    # _patch_ollama_chat_for_timing), since a live diagnosis
-                    # found `elapsed` alone can't tell prefill-bound from
-                    # eval-bound from genuinely-unaccounted-for time.
+                    # breakdown for backend="ollama" (see _patch_ollama_chat),
+                    # since a live diagnosis found `elapsed` alone can't tell
+                    # prefill-bound from eval-bound from genuinely-unaccounted-for
+                    # time.
                     ollama_summary = _summarize_ollama_calls(ollama_calls)
                     extra = f" -- {ollama_summary}" if ollama_summary else ""
                     eval_logger.warning(

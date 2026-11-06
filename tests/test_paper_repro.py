@@ -740,7 +740,7 @@ def test_summarize_ollama_calls_handles_missing_fields_as_zero():
     assert "unaccounted=5.0s" in summary
 
 
-def test_patch_ollama_chat_for_timing_captures_fields_and_preserves_return_value(monkeypatch):
+def test_patch_ollama_chat_captures_fields_and_preserves_return_value(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
     call_log = []
 
@@ -763,18 +763,23 @@ def test_patch_ollama_chat_for_timing_captures_fields_and_preserves_return_value
     fake_ollama.chat = fake_chat
     monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
 
-    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat_for_timing
+    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat
 
     _ollama_call_stats.clear()
-    _patch_ollama_chat_for_timing()
+    _patch_ollama_chat()
 
     import ollama
     response = ollama.chat(model="qwen3.5:9b", messages=[{"role": "user", "content": "hi"}])
 
-    # The wrapper must not change the caller-visible behavior at all --
+    # The wrapper must not change the caller-visible response at all --
     # RobustOllamaController.get_completion only ever reads this field.
     assert response["message"]["content"] == "the answer"
-    assert call_log == [{"model": "qwen3.5:9b", "messages": [{"role": "user", "content": "hi"}]}]
+    # It DOES change what's actually sent to Ollama, deliberately: think=False
+    # gets injected since the vendored code never sets it and qwen3.5:9b
+    # defaults to thinking mode on (docs/decisions/0016).
+    assert call_log == [{
+        "model": "qwen3.5:9b", "messages": [{"role": "user", "content": "hi"}], "think": False,
+    }]
 
     assert len(_ollama_call_stats) == 1
     stat = _ollama_call_stats[0]
@@ -789,7 +794,72 @@ def test_patch_ollama_chat_for_timing_captures_fields_and_preserves_return_value
     _ollama_call_stats.clear()
 
 
-def test_patch_ollama_chat_for_timing_truncates_long_content_preview(monkeypatch):
+def test_patch_ollama_chat_forces_think_false_by_default(monkeypatch):
+    """Root-cause fix (docs/decisions/0016): `ollama show qwen3.5:9b`
+    reports thinking defaults to on, and a live side-by-side comparison
+    showed think=False cut a short keyword-extraction call from 1,115
+    eval tokens/15.3s to 11 eval tokens/0.1s with a functionally
+    identical answer. The vendored RobustOllamaController.get_completion
+    never sets `think` at all, so this must inject it."""
+    fake_ollama = types.ModuleType("ollama")
+    call_log = []
+
+    class _FakeResponse(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+    def fake_chat(*args, **kwargs):
+        call_log.append(kwargs)
+        return _FakeResponse({"message": {"content": "hi"}})
+
+    fake_ollama.chat = fake_chat
+    monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
+
+    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat
+
+    _ollama_call_stats.clear()
+    _patch_ollama_chat()
+
+    import ollama
+    ollama.chat(model="qwen3.5:9b", messages=[])
+
+    assert call_log[0]["think"] is False
+
+    _ollama_call_stats.clear()
+
+
+def test_patch_ollama_chat_respects_an_explicit_think_value(monkeypatch):
+    """setdefault, not an unconditional override -- a caller that
+    explicitly asks for thinking (now or in some future code path) must
+    not be silently fought."""
+    fake_ollama = types.ModuleType("ollama")
+    call_log = []
+
+    class _FakeResponse(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+    def fake_chat(*args, **kwargs):
+        call_log.append(kwargs)
+        return _FakeResponse({"message": {"content": "hi"}})
+
+    fake_ollama.chat = fake_chat
+    monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
+
+    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat
+
+    _ollama_call_stats.clear()
+    _patch_ollama_chat()
+
+    import ollama
+    ollama.chat(model="qwen3.5:9b", messages=[], think=True)
+
+    assert call_log[0]["think"] is True
+
+    _ollama_call_stats.clear()
+
+
+def test_patch_ollama_chat_truncates_long_content_preview(monkeypatch):
     """Real diagnosis finding: token counts alone could only suggest a
     call generated far more than a short structured task should need --
     the actual text (e.g. a visible `<think>...` reasoning block) is what
@@ -810,10 +880,10 @@ def test_patch_ollama_chat_for_timing_truncates_long_content_preview(monkeypatch
     fake_ollama.chat = fake_chat
     monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
 
-    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat_for_timing
+    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat
 
     _ollama_call_stats.clear()
-    _patch_ollama_chat_for_timing()
+    _patch_ollama_chat()
 
     import ollama
     ollama.chat(model="x", messages=[])
@@ -830,7 +900,7 @@ def test_patch_ollama_chat_for_timing_truncates_long_content_preview(monkeypatch
     _ollama_call_stats.clear()
 
 
-def test_patch_ollama_chat_for_timing_omits_tail_for_short_content(monkeypatch):
+def test_patch_ollama_chat_omits_tail_for_short_content(monkeypatch):
     """A response short enough to fit entirely in the head preview (<=80
     chars) has nothing new to show in a tail -- must be empty, not a
     duplicate of the head."""
@@ -846,10 +916,10 @@ def test_patch_ollama_chat_for_timing_omits_tail_for_short_content(monkeypatch):
     fake_ollama.chat = fake_chat
     monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
 
-    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat_for_timing
+    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat
 
     _ollama_call_stats.clear()
-    _patch_ollama_chat_for_timing()
+    _patch_ollama_chat()
 
     import ollama
     ollama.chat(model="x", messages=[])
@@ -888,7 +958,7 @@ def test_summarize_ollama_calls_includes_content_previews():
     )
 
 
-def test_patch_ollama_chat_for_timing_is_idempotent(monkeypatch):
+def test_patch_ollama_chat_is_idempotent(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
     call_count = 0
 
@@ -904,11 +974,11 @@ def test_patch_ollama_chat_for_timing_is_idempotent(monkeypatch):
     fake_ollama.chat = fake_chat
     monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
 
-    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat_for_timing
+    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat
 
     _ollama_call_stats.clear()
-    _patch_ollama_chat_for_timing()
-    _patch_ollama_chat_for_timing()  # second call must not double-wrap
+    _patch_ollama_chat()
+    _patch_ollama_chat()  # second call must not double-wrap
 
     import ollama
     ollama.chat(model="x", messages=[])
