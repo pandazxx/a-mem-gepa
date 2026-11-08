@@ -42,6 +42,16 @@ gepa:
   # (the sign-ambiguous direction documented in docs/decisions/0013).
   adversarial_scoring: refusal
   cache_dir: results/gepa_cache
+  # Mid-build checkpointing (docs/decisions/0017): every N turns an in-progress
+  # build snapshots memories + retriever + LLM-call trace under the build
+  # cache, so an interrupted run resumes that build from the last snapshot
+  # instead of replaying the whole conversation (~1h on a local model). 0
+  # disables. Resume = rerun `just gepa-optimize` with the same --run-label.
+  build_checkpoint_every_turns: 20
+  # Progress line (done/total, avg latency, ETA) every N turns built / N
+  # questions answered; a run-level line (builds, cache hits, metric-call
+  # budget, rough ETA) follows every evaluation.
+  progress_log_every: 10
   # The paper's verbatim prompts (docs/decisions/0014) -- 4 components
   # matching the repro pipeline, generated from llm_text_parsers' constants.
   seed_candidate_dir: src/amem_gepa/prompts/baseline_repro

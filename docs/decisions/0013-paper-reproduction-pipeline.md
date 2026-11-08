@@ -7,7 +7,9 @@ Accepted (2026-09-10). Open questions since resolved: the milestone-3
 (GEPA optimizes this pipeline's four prompts, injected at runtime); the
 adversarial reward direction, for training only, by
 [0015](0015-gepa-training-method.md) (refusal direction, with the paper's
-own metric suite still reported on the test set).
+own metric suite still reported on the test set). The "coarse per-conversation
+resume, revisit on observed pain" note below was revisited for GEPA builds
+in [0017](0017-gepa-local-model-progress-and-resume.md).
 
 ## Context
 

@@ -32,8 +32,11 @@ sequentially, so this doesn't bite in practice).
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import pickle
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,10 +45,18 @@ from typing import Any
 from gepa.core.adapter import EvaluationBatch
 
 from amem_gepa.datasets.locomo import LoCoMoInstance, LoCoMoQuestionGroup
-from amem_gepa.paper_repro import ensure_repro_repo_importable
+from amem_gepa.paper_repro import (
+    _format_duration,
+    _ollama_call_stats,
+    _patch_ollama_chat,
+    _ProgressTracker,
+    _summarize_ollama_calls,
+    ensure_repro_repo_importable,
+)
 from amem_gepa.repro_injection import (
     REQUIRED_PLACEHOLDERS,
     BuildTrace,
+    LLMCallRecord,
     RecordingLLM,
     candidate_hash,
     injected_prompts,
@@ -65,6 +76,21 @@ FAILURE_THRESHOLD = 0.5
 # The exact option string test_advanced_robust.py's category-5 multiple
 # choice offers alongside the trap answer.
 REFUSAL_OPTION = "not mentioned in the conversation"
+
+# Run-level counters persisted to `stats_path` after every evaluate() so a
+# resumed run (same --run-label, docs/decisions/0017) reports totals for the
+# whole run, not just the latest process.
+_STATS_FIELDS = (
+    "builds_performed",
+    "build_cache_hits",
+    "builds_resumed",
+    "llm_calls",
+    "questions_answered",
+    "metric_calls",
+    "evaluations",
+    "build_seconds",
+    "qa_seconds",
+)
 
 
 @dataclass
@@ -108,6 +134,10 @@ class AMemGEPAAdapter:
         cache_dir: Path = Path("results/gepa_cache"),
         adversarial_scoring: str = "refusal",
         max_reflection_examples: int = 5,
+        checkpoint_every_turns: int = 20,
+        log_every: int = 10,
+        max_metric_calls: int | None = None,
+        stats_path: Path | None = None,
     ):
         if adversarial_scoring not in ("refusal", "paper"):
             raise ValueError(f"adversarial_scoring must be 'refusal' or 'paper', got {adversarial_scoring!r}")
@@ -118,17 +148,69 @@ class AMemGEPAAdapter:
         self.cache_dir = Path(cache_dir)
         self.adversarial_scoring = adversarial_scoring
         self.max_reflection_examples = max_reflection_examples
+        # docs/decisions/0017: an in-progress build checkpoints (memories +
+        # retriever + LLM-call trace) every N turns so an interruption costs
+        # at most N turns, not the whole conversation. 0 disables.
+        self.checkpoint_every_turns = checkpoint_every_turns
+        # Progress lines (count / avg latency / ETA) every N turns built or
+        # questions answered.
+        self.log_every = max(1, log_every)
+        self.max_metric_calls = max_metric_calls
+        self.stats_path = Path(stats_path) if stats_path else None
         # Run-level accounting (docs/decisions/0015: builds are the budget
         # currency; CLAUDE.md wants cost totals logged per run).
         self.builds_performed = 0
         self.build_cache_hits = 0
+        self.builds_resumed = 0
         self.llm_calls = 0
+        self.questions_answered = 0
+        self.metric_calls = 0
+        self.evaluations = 0
+        self.build_seconds = 0.0
+        self.qa_seconds = 0.0
+        # Wall-clock carried over from a previous process of the same run.
+        self.prior_elapsed_seconds = 0.0
+        self._started = time.monotonic()
+        if self.stats_path is not None and self.stats_path.exists():
+            self._load_stats()
+        if backend == "ollama":
+            # Same monkeypatch `just reproduce` installs (docs/decisions/0016):
+            # forces `think=False` so a reasoning-capable local model
+            # (qwen3.5:9b) doesn't spend ~100x the tokens per call here that
+            # it was measured not to need there. Without this, the GEPA arm
+            # and the baseline it is compared against would run the same
+            # model under different generation settings.
+            _patch_ollama_chat()
 
     # ------------------------------------------------------------------
     # evaluate
     # ------------------------------------------------------------------
 
     def evaluate(
+        self,
+        batch: list[DataInst],
+        candidate: dict[str, str],
+        capture_traces: bool = False,
+    ) -> EvaluationBatch[ItemTrajectory, Any]:
+        started = time.monotonic()
+        before = (self.builds_performed, self.build_cache_hits, self.questions_answered)
+        result = self._evaluate(batch, candidate, capture_traces)
+        self.metric_calls += len(batch)
+        self.evaluations += 1
+        logger.info(
+            "[eval #%d] %d items: %d builds, %d cache hits, %d questions in %s | %s",
+            self.evaluations,
+            len(batch),
+            self.builds_performed - before[0],
+            self.build_cache_hits - before[1],
+            self.questions_answered - before[2],
+            _format_duration(time.monotonic() - started),
+            self.run_progress_line(),
+        )
+        self._save_stats()
+        return result
+
+    def _evaluate(
         self,
         batch: list[DataInst],
         candidate: dict[str, str],
@@ -159,6 +241,10 @@ class AMemGEPAAdapter:
         outputs: list[Any] = []
         scores: list[float] = []
         trajectories: list[ItemTrajectory] = []
+        total_questions = sum(
+            len(item.questions) if isinstance(item, LoCoMoQuestionGroup) else 1 for item in batch
+        )
+        qa_tracker = _ProgressTracker(logger, f"[eval #{self.evaluations + 1}] QA", total_questions)
 
         for item in batch:
             conv_id = self._conv_id(item)
@@ -190,7 +276,18 @@ class AMemGEPAAdapter:
                     for q in questions
                 ]
             else:
-                q_traces = [self._answer_and_score(agent, q) for q in questions]
+                q_traces = []
+                for q in questions:
+                    q_started = time.monotonic()
+                    q_traces.append(self._answer_and_score(agent, q))
+                    q_elapsed = time.monotonic() - q_started
+                    qa_tracker.record(q_elapsed, cached=False)
+                    self.qa_seconds += q_elapsed
+                    self.questions_answered += 1
+                    if qa_tracker.completed_units % self.log_every == 0 or (
+                        qa_tracker.completed_units == total_questions
+                    ):
+                        logger.info(qa_tracker.progress_line(extra=f"conv={conv_id}"))
 
             traj.questions = q_traces
             item_scores = [qt.score for qt in q_traces]
@@ -283,22 +380,72 @@ class AMemGEPAAdapter:
                 logger.warning("[%s] cache load failed (%s) -- rebuilding", conv_id, e)
 
         build_trace = BuildTrace(conversation_id=conv_id, candidate_hash=cand_hash)
+        partial = self._partial_paths(paths["dir"])
+        start_turn = 0
+        if partial["state"].exists():
+            restored = self._restore_partial(agent, partial, conv_id, len(turns))
+            if restored is not None:
+                start_turn, prior_records = restored
+                # Pre-interruption construction/evolution calls stay in the
+                # trace, so reflection over this build still sees them.
+                agent.memory_system.llm_controller.llm.records = list(prior_records)
+                self.builds_resumed += 1
+        records_before = len(agent.memory_system.llm_controller.llm.records)
+
+        tracker = _ProgressTracker(
+            logger, f"[build {conv_id} cand={cand_hash[:8]}] memory-build", len(turns)
+        )
+        for _ in range(start_turn):
+            tracker.record(0.0, cached=True)
+        build_started = time.monotonic()
         try:
             with injected_prompts(candidate):
-                for turn in turns:
+                for idx in range(start_turn, len(turns)):
+                    turn = turns[idx]
                     # Exact content format from test_advanced_robust.py's
                     # evaluate_dataset (including the missing space) -- the
                     # baseline numbers were produced with it, so the GEPA
                     # arm must match.
                     content = "Speaker " + turn.speaker + "says : " + turn.text
+                    _ollama_call_stats.clear()
+                    turn_started = time.monotonic()
                     agent.add_memory(content, time=turn.date_time)
+                    elapsed = time.monotonic() - turn_started
+                    tracker.record(elapsed, cached=False)
+                    done = idx + 1
+                    ollama_summary = _summarize_ollama_calls(list(_ollama_call_stats))
+                    if tracker.is_outlier(elapsed):
+                        logger.warning(
+                            "[%s] slow memory-build turn %d: %.1fs (running avg %.1fs)%s",
+                            conv_id,
+                            done,
+                            elapsed,
+                            tracker.avg_latency,
+                            f" -- {ollama_summary}" if ollama_summary else "",
+                        )
+                    if done % self.log_every == 0 or done == len(turns):
+                        logger.info(tracker.progress_line(extra=ollama_summary))
+                    checkpoint_due = (
+                        self.checkpoint_every_turns
+                        and done < len(turns)
+                        and done % self.checkpoint_every_turns == 0
+                    )
+                    if checkpoint_due:
+                        self._write_partial(agent, partial, conv_id, done)
         except Exception as e:  # noqa: BLE001
-            logger.error("[%s] memory build failed: %s", conv_id, e)
+            logger.error(
+                "[%s] memory build failed at turn %d/%d: %s",
+                conv_id,
+                tracker.completed_units,
+                len(turns),
+                e,
+            )
             return None, None, False, str(e)
 
         build_trace.records = list(agent.memory_system.llm_controller.llm.records)
         self.builds_performed += 1
-        self.llm_calls += len(build_trace.records)
+        self.build_seconds += time.monotonic() - build_started
+        self.llm_calls += len(build_trace.records) - records_before
 
         try:
             paths["dir"].mkdir(parents=True, exist_ok=True)
@@ -306,6 +453,7 @@ class AMemGEPAAdapter:
                 pickle.dump(agent.memory_system.memories, f)
             agent.memory_system.retriever.save(str(paths["retriever"]), str(paths["retriever_embeddings"]))
             paths["trace"].write_text(build_trace.to_json())
+            self._discard_partial(partial)
         except Exception as e:  # noqa: BLE001
             # A failed cache write must not fail the evaluation -- the
             # in-memory agent is still valid, we just pay the build again
@@ -313,6 +461,177 @@ class AMemGEPAAdapter:
             logger.warning("[%s] cache write failed: %s", conv_id, e)
 
         return agent, build_trace, False, None
+
+    # ------------------------------------------------------------------
+    # mid-build checkpoints (docs/decisions/0017)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _partial_paths(build_dir: Path) -> dict[str, Path]:
+        base = build_dir / "partial"
+        return {
+            "dir": base,
+            "state": base / "state.pkl",
+            "retriever": base / "retriever.pkl",
+            "retriever_embeddings": base / "retriever_embeddings.npy",
+        }
+
+    def _write_partial(
+        self, agent, partial: dict[str, Path], conv_id: str, turns_done: int
+    ) -> None:
+        """Snapshot an in-progress build. The memories, the turn count and
+        the LLM-call records go in ONE pickle so they can't disagree with
+        each other; the retriever is saved via the vendored code's own
+        save() (same file format as the final cache) so the resumed build
+        continues with exactly the retriever state it had, rather than one
+        re-derived from the notes (which load_from_local_memory would
+        build with a different document format). Every file is written to
+        a temp name and os.replace()d, so a crash mid-write leaves the
+        previous checkpoint intact; a crash between the replaces leaves a
+        retriever/memories count mismatch that _restore_partial detects
+        and discards."""
+        try:
+            partial["dir"].mkdir(parents=True, exist_ok=True)
+            state = {
+                "turns_done": turns_done,
+                "evo_cnt": getattr(agent.memory_system, "evo_cnt", None),
+                "memories": agent.memory_system.memories,
+                "records": [r.to_dict() for r in agent.memory_system.llm_controller.llm.records],
+            }
+            tmp_state = partial["state"].with_suffix(".tmp")
+            with open(tmp_state, "wb") as f:
+                pickle.dump(state, f)
+            tmp_retriever = partial["retriever"].with_suffix(".tmp")
+            tmp_embeddings = partial["retriever_embeddings"].with_suffix(".tmp.npy")
+            agent.memory_system.retriever.save(str(tmp_retriever), str(tmp_embeddings))
+            os.replace(tmp_state, partial["state"])
+            os.replace(tmp_retriever, partial["retriever"])
+            if tmp_embeddings.exists():
+                os.replace(tmp_embeddings, partial["retriever_embeddings"])
+            logger.info("[%s] build checkpoint written at turn %d", conv_id, turns_done)
+        except Exception as e:  # noqa: BLE001 -- a failed checkpoint must not fail the build
+            logger.warning("[%s] build checkpoint at turn %d failed: %s", conv_id, turns_done, e)
+
+    def _restore_partial(self, agent, partial: dict[str, Path], conv_id: str, n_turns: int):
+        """Returns (turns_done, prior LLMCallRecords) after loading the
+        checkpoint into `agent`, or None (with the checkpoint discarded) if
+        it is unusable -- in which case the build simply starts over."""
+        try:
+            with open(partial["state"], "rb") as f:
+                state = pickle.load(f)
+            turns_done = int(state["turns_done"])
+            memories = state["memories"]
+            if not 0 < turns_done < n_turns:
+                raise ValueError(f"turns_done={turns_done} is not inside (0, {n_turns})")
+            retriever = agent.memory_system.retriever.load(
+                str(partial["retriever"]), str(partial["retriever_embeddings"])
+            )
+            corpus = getattr(retriever, "corpus", None)
+            if corpus is not None and len(corpus) != len(memories):
+                raise ValueError(
+                    f"retriever has {len(corpus)} documents but {len(memories)} memories"
+                )
+            agent.memory_system.memories = memories
+            agent.memory_system.retriever = retriever
+            if state.get("evo_cnt") is not None and hasattr(agent.memory_system, "evo_cnt"):
+                agent.memory_system.evo_cnt = state["evo_cnt"]
+            records = [LLMCallRecord(**r) for r in state.get("records", [])]
+            logger.info(
+                "[%s] resuming interrupted build at turn %d/%d (%d memories, %d LLM calls)",
+                conv_id,
+                turns_done,
+                n_turns,
+                len(memories),
+                len(records),
+            )
+            return turns_done, records
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "[%s] build checkpoint unusable (%s) -- rebuilding from scratch", conv_id, e
+            )
+            self._discard_partial(partial)
+            return None
+
+    @staticmethod
+    def _discard_partial(partial: dict[str, Path]) -> None:
+        for key in ("state", "retriever", "retriever_embeddings"):
+            try:
+                partial[key].unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            partial["dir"].rmdir()
+        except OSError:
+            pass
+
+    # ------------------------------------------------------------------
+    # run-level progress + persisted accounting (docs/decisions/0017)
+    # ------------------------------------------------------------------
+
+    @property
+    def elapsed_seconds(self) -> float:
+        return self.prior_elapsed_seconds + (time.monotonic() - self._started)
+
+    def eta_seconds(self) -> float | None:
+        """Rough remaining wall-clock from the metric-call budget at the
+        run's average pace so far. Honest about what it is: GEPA's cache-
+        hit rate and acceptance rate change over a run, so this swings --
+        it answers "days or hours?", not "when exactly?"."""
+        if not self.max_metric_calls or self.metric_calls <= 0:
+            return None
+        remaining = max(self.max_metric_calls - self.metric_calls, 0)
+        return self.elapsed_seconds / self.metric_calls * remaining
+
+    def run_progress_line(self) -> str:
+        bits = [f"run: builds={self.builds_performed}", f"cache_hits={self.build_cache_hits}"]
+        if self.builds_resumed:
+            bits.append(f"resumed_builds={self.builds_resumed}")
+        if self.builds_performed:
+            bits.append(f"avg_build={_format_duration(self.build_seconds / self.builds_performed)}")
+        bits.append(f"questions={self.questions_answered}")
+        if self.questions_answered:
+            bits.append(f"avg_qa={self.qa_seconds / self.questions_answered:.1f}s")
+        bits.append(f"llm_calls={self.llm_calls}")
+        if self.max_metric_calls:
+            bits.append(f"metric_calls={self.metric_calls}/{self.max_metric_calls}")
+            eta = self.eta_seconds()
+            if eta is not None:
+                bits.append(f"ETA~{_format_duration(eta)} (rough, at current pace)")
+        else:
+            bits.append(f"metric_calls={self.metric_calls}")
+        bits.append(f"elapsed={_format_duration(self.elapsed_seconds)}")
+        return " | ".join(bits)
+
+    def stats(self) -> dict:
+        data = {field_name: getattr(self, field_name) for field_name in _STATS_FIELDS}
+        data["elapsed_seconds"] = self.elapsed_seconds
+        return data
+
+    def _save_stats(self) -> None:
+        if self.stats_path is None:
+            return
+        try:
+            self.stats_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.stats_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.stats(), indent=2))
+            os.replace(tmp, self.stats_path)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("could not write run stats to %s: %s", self.stats_path, e)
+
+    def _load_stats(self) -> None:
+        try:
+            data = json.loads(self.stats_path.read_text())
+            for field_name in _STATS_FIELDS:
+                current = getattr(self, field_name)
+                setattr(self, field_name, type(current)(data.get(field_name, current)))
+            self.prior_elapsed_seconds = float(data.get("elapsed_seconds", 0.0))
+            logger.info(
+                "resuming run accounting from %s: %s", self.stats_path, self.run_progress_line()
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "could not read run stats from %s (%s) -- counting from zero", self.stats_path, e
+            )
 
     # ------------------------------------------------------------------
     # answering + scoring
