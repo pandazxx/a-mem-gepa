@@ -2,7 +2,16 @@
 
 ## Status
 
-Accepted (2026-09-06)
+Partially superseded (2026-09-19) by
+[0014](0014-gepa-targets-repro-pipeline.md). Originally accepted 2026-09-06.
+
+- **No longer valid:** the two-prompt candidate (note construction + one
+  evolution prompt) against the `agiresearch/A-mem` library. GEPA's candidate
+  is the repro pipeline's four prompts (note construction + three evolution
+  steps), see 0014.
+- **Still in force:** the baseline is the paper's verbatim prompts with no
+  hand-tuning pass; all prompts in a candidate are optimized jointly;
+  retrieval/QA prompts are frozen.
 
 ## Context
 
