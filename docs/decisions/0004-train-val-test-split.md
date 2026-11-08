@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted (2026-09-06)
+Accepted (2026-09-06). Clarified 2026-11-08: this split governs GEPA
+training/validation and the final held-out test comparison
+([0015](0015-gepa-training-method.md)). It does **not** apply to
+`just reproduce`, which runs the full 10-conversation dataset exactly as the
+paper did ([0013](0013-paper-reproduction-pipeline.md)) -- a number computed
+on the 3 test conversations alone is not comparable to the paper's table.
 
 ## Context
 

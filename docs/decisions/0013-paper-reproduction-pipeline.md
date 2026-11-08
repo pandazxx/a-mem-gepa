@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted (2026-09-10)
+Accepted (2026-09-10). Open questions since resolved: the milestone-3
+"4 prompts or 2" question by [0014](0014-gepa-targets-repro-pipeline.md)
+(GEPA optimizes this pipeline's four prompts, injected at runtime); the
+adversarial reward direction, for training only, by
+[0015](0015-gepa-training-method.md) (refusal direction, with the paper's
+own metric suite still reported on the test set).
 
 ## Context
 

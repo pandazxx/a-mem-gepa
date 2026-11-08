@@ -2,7 +2,21 @@
 
 ## Status
 
-Accepted (2026-09-06)
+Superseded (2026-11-08) by [0013](0013-paper-reproduction-pipeline.md) and
+[0014](0014-gepa-targets-repro-pipeline.md). Originally accepted 2026-09-06.
+
+- **No longer valid:** the premise that the paper's QA-answering step is
+  unpublished and the project must author its own. `WujiangXu/AgenticMemory`
+  (vendored, 0013) ships the paper's actual QA step: an LLM keyword query
+  before retrieval, category-specific answer prompts, and a multiple-choice
+  format for adversarial questions. The measured path (`just reproduce` and
+  every GEPA rollout, 0014) calls that code unchanged. `prompts/qa_answer.txt`
+  is used only by the legacy `evaluate.py` pipeline (`just demo`/`just
+  baseline`) and is behind no reported number.
+- **Still in force (carried into 0014):** the QA prompt is fixed, identical
+  across the baseline and every GEPA candidate, and never an optimization
+  target, so a measured gain comes from memory management rather than answer
+  phrasing. It is now the paper's prompt that is held fixed, not ours.
 
 ## Context
 
