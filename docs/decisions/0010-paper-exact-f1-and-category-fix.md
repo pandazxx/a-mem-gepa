@@ -2,7 +2,22 @@
 
 ## Status
 
-Accepted (2026-09-09)
+Partially superseded (2026-11-08) by
+[0013](0013-paper-reproduction-pipeline.md). Originally accepted 2026-09-09.
+
+- **No longer valid:** the scoring port. It was taken from
+  `snap-research/locomo`'s eval script, a different repo from the paper's own
+  code, which scores every category uniformly with `utils.calculate_metrics`
+  (token-set F1, BLEU, ROUGE, BERTScore, ...) and never does comma-split
+  multi-hop, semicolon-truncated open-domain, or refusal-phrase adversarial
+  matching (0013). `metrics.py` remains for the legacy `just demo`/`just
+  baseline` pipeline only. The "adversarial QA prompt needs revisiting"
+  consequence is moot: the paper's adversarial QA is multiple choice, and
+  [0015](0015-gepa-training-method.md) fixes the training reward direction.
+- **Still in force:** the `CATEGORY_LABELS` fix (1=multi-hop, 2=temporal,
+  3=open-domain, 4=single-hop, 5=adversarial). `datasets/locomo.py` is shared
+  with the GEPA pipeline's grouping and val-subset code (0015), and these
+  labels are what every experiment doc reports under.
 
 ## Context
 
