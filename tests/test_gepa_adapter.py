@@ -178,7 +178,12 @@ def fake_repro(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "llm_text_parsers", fake_parsers)
 
     def make_adapter(**kwargs):
-        defaults = {"backend": "openai", "model": "gpt-4o-mini", "cache_dir": tmp_path / "gepa_cache"}
+        defaults = {
+            "backend": "openai",
+            "model": "gpt-4o-mini",
+            "cache_dir": tmp_path / "gepa_cache",
+            "ensure_nltk": False,  # no network in unit tests; covered by its own test below
+        }
         defaults.update(kwargs)
         return AMemGEPAAdapter(**defaults)
 
@@ -492,3 +497,17 @@ def test_progress_lines_are_logged_for_builds_questions_and_the_run(fake_repro, 
     assert "QA: 1/1" in text
     assert "[eval #1] 1 items: 1 builds, 0 cache hits, 1 questions" in text
     assert "run: builds=1" in text
+
+
+def test_adapter_downloads_nltk_scoring_data_up_front(fake_repro, monkeypatch):
+    """The vendored calculate_metrics needs nltk's punkt_tab at call time;
+    the first real smoke run failed on the first scored question, after a
+    full build. The adapter must run the same pre-flight `just reproduce`
+    does, at construction time, before any build."""
+    import amem_gepa.gepa_adapter as mod
+
+    calls = []
+    monkeypatch.setattr(mod, "ensure_nltk_data", lambda: calls.append(1))
+
+    fake_repro(ensure_nltk=True)
+    assert calls == [1]

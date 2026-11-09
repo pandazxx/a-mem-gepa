@@ -51,6 +51,7 @@ from amem_gepa.paper_repro import (
     _patch_ollama_chat,
     _ProgressTracker,
     _summarize_ollama_calls,
+    ensure_nltk_data,
     ensure_repro_repo_importable,
 )
 from amem_gepa.repro_injection import (
@@ -138,6 +139,7 @@ class AMemGEPAAdapter:
         log_every: int = 10,
         max_metric_calls: int | None = None,
         stats_path: Path | None = None,
+        ensure_nltk: bool = True,
     ):
         if adversarial_scoring not in ("refusal", "paper"):
             raise ValueError(f"adversarial_scoring must be 'refusal' or 'paper', got {adversarial_scoring!r}")
@@ -173,6 +175,14 @@ class AMemGEPAAdapter:
         self._started = time.monotonic()
         if self.stats_path is not None and self.stats_path.exists():
             self._load_stats()
+        if ensure_nltk:
+            # Same pre-flight `just reproduce` does (paper_repro.ensure_nltk_data):
+            # the vendored utils.calculate_metrics calls nltk.word_tokenize,
+            # which needs 'punkt_tab' at call time. Without this the first
+            # real smoke run died with a LookupError on the very first scored
+            # question -- *after* a full memory build. Done here, before any
+            # build, so a missing resource fails in seconds instead.
+            ensure_nltk_data()
         if backend == "ollama":
             # Same monkeypatch `just reproduce` installs (docs/decisions/0016):
             # forces `think=False` so a reasoning-capable local model
