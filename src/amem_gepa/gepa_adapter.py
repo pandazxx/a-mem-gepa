@@ -126,6 +126,14 @@ class AMemGEPAAdapter:
     are grouped by conversation here, so a full-valset evaluation still
     costs one build per val conversation."""
 
+    # GEPAAdapter's optional instruction-proposal hook. The library reads this
+    # with plain attribute access (`adapter.propose_new_texts is not None`),
+    # so it must exist: without it every reflection step died with
+    # AttributeError and the first real smoke run burned its whole budget
+    # re-evaluating the seed. None = use GEPA's default proposer, which calls
+    # reflection_lm over make_reflective_dataset()'s output.
+    propose_new_texts = None
+
     def __init__(
         self,
         backend: str,

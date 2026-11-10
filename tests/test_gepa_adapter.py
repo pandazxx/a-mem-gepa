@@ -511,3 +511,11 @@ def test_adapter_downloads_nltk_scoring_data_up_front(fake_repro, monkeypatch):
 
     fake_repro(ensure_nltk=True)
     assert calls == [1]
+
+
+def test_adapter_exposes_the_optional_gepa_protocol_hook_as_none(fake_repro):
+    """gepa's ReflectiveMutationProposer does `adapter.propose_new_texts is
+    not None` with plain attribute access; a missing attribute (not None)
+    made every reflection step fail and the smoke run propose nothing."""
+    adapter = fake_repro()
+    assert adapter.propose_new_texts is None
