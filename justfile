@@ -3,8 +3,12 @@ set dotenv-load := true
 default:
     @just --list
 
-# Install/sync Python dependencies
+# Install/sync Python dependencies. Initializes both git submodules first:
+# external/a-mem is an editable uv dependency (pyproject.toml), so with an
+# empty submodule `uv sync` fails with "does not appear to be a Python
+# project"; the repro pipeline needs external/agentic-memory-repro too.
 setup:
+    git submodule update --init --recursive
     uv sync
 
 # Fast end-to-end sanity demo: one truncated conversation, a few questions
