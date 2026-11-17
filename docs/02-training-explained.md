@@ -164,6 +164,42 @@ reads the `DECISION:` line. A candidate that breaks either rule scores
 zero without spending anything, and the error message is handed back to
 the optimizer so the next attempt can fix it.
 
+### 5.1 Where the paper says this, and where it does not
+
+The four boxes map onto the paper (arXiv 2502.12110) like this:
+
+| box in section 3 | paper text | paper prompt | paper's own code (Feb 2025) | reproduction repo's "robust" code (Mar 2026), what we train |
+|---|---|---|---|---|
+| Note construction | §3.1, Eq. 1-3: LLM writes keywords, context, tags | Appendix B.1, P_s1 | one JSON call | one plain-text call |
+| Evolution decision | §3.2 Eq. 6 "analyze potential connections"; §3.3 "determines whether to update" | P_s2 ends with "Should this memory be evolved?"; P_s3 has a `should_evolve` flag and an `actions` list | folded into one JSON call together with the two rows below | its own call, answering `DECISION:` |
+| Strengthen | §3.2 Eq. 6: the link set L_n for the new note | P_s3: "which memory should it be connected to", "updated tags" | same single JSON call (`suggested_connections`, `tags_to_update`) | its own call, run only if the decision said STRENGTHEN |
+| Update neighbors | §3.3 Eq. 7: evolved neighbor m_j* replaces m_j | P_s3: "update the context and tags of these memories" | same single JSON call (`new_context_neighborhood`, `new_tags_neighborhood`) | its own call, run only if the decision said UPDATE_NEIGHBOR |
+
+So the *decision* is in the paper, but not as a separate step. The paper
+describes two conceptual operations, link generation (§3.2) and memory
+evolution (§3.3), and its released code implements both in a single LLM
+call that returns one JSON object with a `should_evolve` boolean, an
+`actions` list and all the link and rewrite fields at once. The explicit
+three-way split, decide first and then run only the actions chosen, was
+introduced by the repository maintainers in March 2026 in the "robust"
+evaluation path, which removes the JSON-schema dependency so the pipeline
+runs on any backend. That robust path is what `run_all_experiments.sh`
+drives and what this project vendored and trains
+([ADR 0013](decisions/0013-paper-reproduction-pipeline.md)).
+
+Two consequences worth keeping in mind:
+
+- The seed candidate is the paper's prompts as *re-expressed by the
+  maintainers' robust code*, byte for byte, not the appendix prompts byte
+  for byte. The wording and the semantics (the same four decisions over
+  the same five neighbors) are the paper's; the decomposition into three
+  calls is not.
+- In the paper's text the evolution step reuses the top-k neighbors from
+  retrieval. In both the original and the robust code the neighbor count
+  for evolution is fixed at 5, independent of the retrieval k used at
+  answer time. The decision box compares the new note with exactly 5
+  neighbors for that reason.
+
 ## 6. How GEPA trains a prompt
 
 GEPA stands for Genetic-Pareto. The everyday analogy is a coach who
