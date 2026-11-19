@@ -381,6 +381,12 @@ paper pipeline, with the paper's prompts as the baseline and the trained
 four files as the candidate, through the same adapter that trained them.
 The legacy `just eval` is for the legacy pipeline only.
 
+That tool now exists: `just gepa-test-eval <candidate dir>`
+([ADR 0018](decisions/0018-held-out-test-comparison.md)). It runs both arms
+through the adapter on every question of the three test conversations,
+scores with the paper's suite, and reports the candidate-minus-baseline
+difference with a paired bootstrap interval.
+
 ## 9. Glossary
 
 - **A-MEM.** The agentic memory system from the paper; stores a note per

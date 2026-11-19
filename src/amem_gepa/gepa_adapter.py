@@ -78,6 +78,15 @@ FAILURE_THRESHOLD = 0.5
 # choice offers alongside the trap answer.
 REFUSAL_OPTION = "not mentioned in the conversation"
 
+def reference_answer(q: LoCoMoInstance) -> str:
+    """The string a prediction is scored against: the trap answer for
+    adversarial questions (what the paper's own code does, docs/decisions/
+    0013), the gold answer otherwise."""
+    if q.is_adversarial:
+        return str(q.adversarial_answer or "")
+    return "" if q.gold_answer is None else str(q.gold_answer)
+
+
 # Run-level counters persisted to `stats_path` after every evaluate() so a
 # resumed run (same --run-label, docs/decisions/0017) reports totals for the
 # whole run, not just the latest process.
@@ -656,9 +665,19 @@ class AMemGEPAAdapter:
     # ------------------------------------------------------------------
 
     def _reference(self, q: LoCoMoInstance) -> str:
-        if q.is_adversarial:
-            return str(q.adversarial_answer or "")
-        return "" if q.gold_answer is None else str(q.gold_answer)
+        return reference_answer(q)
+
+    def build_for_conversation(self, candidate: dict[str, str], conv_id: str, turns: list) -> tuple:
+        """Public entry point for tools other than GEPA's engine (the held-out
+        test evaluation, docs/decisions/0018) that need a memory built with a
+        candidate's prompts and want the same cache / checkpoint / tracing
+        behaviour as training. Returns (agent, BuildTrace|None, cache_hit,
+        error|None). Raises on an invalid candidate rather than scoring 0:
+        a human invoked this deliberately, so fail loudly."""
+        problems = validate_candidate(candidate)
+        if problems:
+            raise ValueError(f"invalid candidate: {problems}")
+        return self._build_or_load(candidate, candidate_hash(candidate), conv_id, turns)
 
     def _score(self, prediction: str, q: LoCoMoInstance, reference: str) -> float:
         ensure_repro_repo_importable()
