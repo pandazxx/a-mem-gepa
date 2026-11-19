@@ -257,7 +257,7 @@ def paired_bootstrap(
         idx = rng.integers(0, len(d), size=(n_resamples, len(d)))
         means = d[idx].mean(axis=1)
         out[label] = {
-            "n": int(len(d)),
+            "n": len(d),
             "baseline_mean": float(b.mean()),
             "candidate_mean": float(c.mean()),
             "diff_mean": float(d.mean()),

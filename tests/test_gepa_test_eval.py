@@ -27,7 +27,7 @@ def _instances():
     ]
 
 
-def test_run_test_eval_scores_both_arms_and_writes_report(fake_repro, tmp_path):
+def test_run_test_eval_scores_both_arms_and_writes_report(fake_repro, tmp_path):  # noqa: F811 -- fixture imported above
     adapter = fake_repro()
     report = run_test_eval(adapter, BASELINE, CANDIDATE, _instances(), tmp_path / "out", bootstrap_resamples=200)
 
@@ -48,7 +48,7 @@ def test_run_test_eval_scores_both_arms_and_writes_report(fake_repro, tmp_path):
     assert "| single_hop | 2 |" in table and "refusal reading" in table
 
 
-def test_test_eval_resumes_from_the_per_question_progress_log(fake_repro, tmp_path):
+def test_test_eval_resumes_from_the_per_question_progress_log(fake_repro, tmp_path):  # noqa: F811 -- fixture imported above
     adapter = fake_repro()
     run_test_eval(adapter, BASELINE, CANDIDATE, _instances(), tmp_path / "out", bootstrap_resamples=50)
     agents_before = len(_FakeAgent.instances)
