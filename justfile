@@ -64,8 +64,11 @@ eval candidate config="configs/base.yaml":
 # conversations, the paper's metric suite, both adversarial readings, paired
 # bootstrap CI. Costs ~6 memory builds; needs --yes to start:
 #   just gepa-test-eval results/gepa-qwen35-9b-v1/best_candidate --yes
-gepa-test-eval candidate config="configs/base.yaml" *args="":
-    uv run python scripts/run_gepa_test_eval.py --config {{config}} --candidate {{candidate}} {{args}}
+# Config is fixed to configs/base.yaml here (unlike the other recipes) so that
+# flags can follow the candidate directly; pass `--config other.yaml` in the
+# flags to override (the last --config wins).
+gepa-test-eval candidate *args="":
+    uv run python scripts/run_gepa_test_eval.py --config configs/base.yaml --candidate {{candidate}} {{args}}
 
 # Regenerate the LoCoMo train/val/test split manifest (see docs/decisions/0004)
 split:
