@@ -56,13 +56,21 @@ refusal direction on the validation set (ADR 0015). Neither interval
 excludes zero, but this is the largest and most consistent signal in the
 table and it is in the wrong direction.
 
-Validation (training-time, refusal direction, stratified ~150-question
-subset of conv-42/conv-50 — not comparable to the test numbers above):
-best candidate (index 13 of 14) aggregate **0.3784**. Seed aggregate:
-**TODO** — read from the iteration-0 line of
-`results/gepa-qwen35-9b-v1.console.log` (`grep -n "Iteration 0"`).
-Without it, the size of the validation-to-test gap (i.e. how much of the
-validation gain was overfitting to 2 conversations) cannot be stated.
+Validation (training-time objective: paper F1 for categories 1-4, refusal
+direction for category 5; the fixed stratified subset of conv-42/conv-50 =
+138 questions): seed **0.3221**, best candidate (index 13 of 14) **0.3784**,
+i.e. **+5.6 points on validation**. (The seed number comes from the "Base
+program full valset score ... over 138 / 138 examples" line GEPA re-logs on
+resume; the iteration-0 lines themselves were lost because the console log
+was re-created with `tee` instead of `tee -a` on the resumed run.)
+
+Re-scoring the test table under that same training objective (swap the
+adversarial F1 row for the refusal rate, weight by n) gives baseline
+**0.432** vs candidate **0.409**: **-2.3 points on test**. So the +5.6 seen
+during training did not transfer at all; it reversed. With only 2
+validation conversations, the simplest reading is that GEPA found prompts
+that suit conv-42/conv-50 specifically, and most of the validation gain was
+fit to those two conversations rather than to the task.
 
 Not comparable to [003](003-qwen3.5-9b-exploration.md)'s 0.46 overall:
 that was all 10 conversations at k=40; this is 3 held-out conversations at
@@ -133,8 +141,8 @@ with a 9B reflector: nothing measurable.
 Candidate 13 is **not adopted** as a new baseline. Next steps, in order of
 expected information per hour:
 
-- Fill the three TODOs above (seed validation score, prompt diff, Pareto
-  table) — all from files already on disk, no compute.
+- Fill the two remaining TODOs above (prompt diff, Pareto table) — from
+  files already on disk, no compute.
 - Inspect one cached build trace for the ~1,900 calls/build figure: if
   the plain-text parsers are falling back to retries on most turns, the
   reflection dossiers are being built from degraded outputs.
@@ -142,10 +150,13 @@ expected information per hour:
   same 9B model, with thinking on through LiteLLM) is the cheapest change
   that targets proposal quality rather than budget. Reflection is ~1 call
   per iteration, so a hosted model costs cents, not dollars.
-- Validation is 2 conversations. If the seed's validation score turns out
-  to be well below 0.378, the gain was real on val and vanished on test —
-  i.e. overfitting to two conversations — which argues for 0004's deferred
-  rotating-split check before spending another week.
+- Validation is 2 conversations, and the +5.6 validation gain became -2.3
+  on test under the same objective: overfitting to two conversations is
+  now the leading explanation, not a hypothesis. Before spending another
+  week, either widen validation (0004's deferred rotating-split check, or
+  a 4/3/3 split at the cost of training conversations) or at minimum make
+  acceptance require a gain on *both* validation conversations rather than
+  on their pooled average.
 - Build cost dominates; ADR 0015's deferred truncated-conversation train
   instances would cut iteration cost several-fold and are now worth a
   calibration run.
