@@ -13,6 +13,7 @@ rerun with --yes.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -30,7 +31,14 @@ def _val_manifest_entry(inst) -> dict:
 def main(
     config: str = typer.Option(..., "--config"),
     yes: bool = typer.Option(False, "--yes", help="Actually start the run (otherwise: print the plan and exit)."),
-    run_label: str = typer.Option(None, "--run-label", help="Results dir name; default: gepa_<timestamp>."),
+    run_label: str = typer.Option(
+        None,
+        "--run-label",
+        help="Results dir name; default: gepa_<timestamp>. Reuse a label to RESUME an interrupted "
+        "run: GEPA state is reloaded from results/<label>/gepa_state.bin, finished builds come "
+        "from the build cache, and an in-progress build resumes from its last turn checkpoint "
+        "(docs/decisions/0017).",
+    ),
     smoke: bool = typer.Option(
         False,
         "--smoke",
@@ -130,7 +138,17 @@ def main(
         f"(+{len(val_convs)} builds, cached per candidate); each minibatch costs {minibatch}."
     )
     typer.echo(f"  adversarial scoring:  {gepa_cfg.get('adversarial_scoring', 'refusal')} (docs/decisions/0015)")
-    typer.echo(f"  run dir:              {run_dir}")
+    resuming = (run_dir / "gepa_state.bin").exists()
+    resume_note = "  (RESUMING -- gepa_state.bin found)" if resuming else ""
+    typer.echo(f"  run dir:              {run_dir}{resume_note}")
+    typer.echo(
+        f"  build checkpoints:    every {gepa_cfg.get('build_checkpoint_every_turns', 20)} turns; "
+        f"progress lines every {gepa_cfg.get('progress_log_every', 10)} turns/questions"
+    )
+    typer.echo(
+        f"  interrupt/resume:     Ctrl-C (or `touch {run_dir}/gepa.stop` for a graceful stop), "
+        f"then rerun with --run-label {label}"
+    )
 
     if not yes:
         typer.echo("\nDry plan only. Confirm budget/models per CLAUDE.md, then rerun with --yes.")
@@ -153,6 +171,19 @@ def main(
 
     import gepa
 
+    # Progress/ETA lines from the adapter (docs/decisions/0017) go to the
+    # console AND results/<label>/amem_gepa.log, so a run started in the
+    # background (CLAUDE.md's preference for long jobs) can be followed
+    # with `tail -f`. GEPA's own engine log is run_log.txt in the same dir.
+    run_dir.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.StreamHandler(), logging.FileHandler(run_dir / "amem_gepa.log")],
+    )
+    if resuming:
+        logging.getLogger("amem_gepa.run_gepa_optimize").info("resuming GEPA run from %s", run_dir)
+
     adapter = AMemGEPAAdapter(
         backend=backend,
         model=model,
@@ -160,6 +191,10 @@ def main(
         temperature_c5=gepa_cfg.get("temperature_c5", 0.5),
         cache_dir=Path(gepa_cfg.get("cache_dir", "results/gepa_cache")),
         adversarial_scoring=gepa_cfg.get("adversarial_scoring", "refusal"),
+        checkpoint_every_turns=gepa_cfg.get("build_checkpoint_every_turns", 20),
+        log_every=gepa_cfg.get("progress_log_every", 10),
+        max_metric_calls=gepa_cfg["max_metric_calls"],
+        stats_path=run_dir / "adapter_stats.json",
     )
 
     result = gepa.optimize(
@@ -182,11 +217,11 @@ def main(
 
     summary = {
         "smoke": smoke,
+        "resumed": resuming,
         "best_val_aggregate": result.val_aggregate_scores[result.best_idx],
         "num_candidates": len(result.candidates),
-        "builds_performed": adapter.builds_performed,
-        "build_cache_hits": adapter.build_cache_hits,
-        "llm_calls": adapter.llm_calls,
+        # Whole-run totals, carried across interruptions via adapter_stats.json.
+        **adapter.stats(),
         "config": config,
         "backend": backend,
         "model": model,

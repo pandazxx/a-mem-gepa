@@ -4,6 +4,8 @@ ones pull torch/sentence-transformers), and exercises evaluation grouping,
 the build cache, scoring (incl. the adversarial direction), candidate
 validation, and reflective-dataset attribution."""
 
+import json
+import logging
 import sys
 import types
 from typing import ClassVar
@@ -12,6 +14,7 @@ import pytest
 
 from amem_gepa.datasets.locomo import LoCoMoInstance, LoCoMoQuestionGroup, LoCoMoTurn
 from amem_gepa.gepa_adapter import AMemGEPAAdapter
+from amem_gepa.repro_injection import candidate_hash
 
 CANDIDATE = {
     "note_construction": "NOTECON analyze: {content}",
@@ -66,6 +69,7 @@ class _FakeMemorySystem:
         self.memories = {}
         self.retriever = _FakeRetriever()
         self.llm_controller = types.SimpleNamespace(llm=_EchoLLM())
+        self.evo_cnt = 0
 
 
 class _FakeAgent:
@@ -77,6 +81,9 @@ class _FakeAgent:
     answers: ClassVar[dict] = {}  # question -> canned prediction
     context_mode = "all"  # "all": every stored memory in raw_context; "empty": none
     fail_build = False
+    # Simulates the process dying partway through a build: raises once this
+    # many turns have been added *in this agent instance*.
+    fail_after_turns: ClassVar[int | None] = None
 
     def __init__(self, model, backend, retrieve_k, temperature_c5):
         self.model = model
@@ -92,6 +99,9 @@ class _FakeAgent:
     def add_memory(self, content, time=None):
         if _FakeAgent.fail_build:
             raise RuntimeError("backend exploded")
+        limit = _FakeAgent.fail_after_turns
+        if limit is not None and len(self.added) >= limit:
+            raise RuntimeError("killed mid-build")
         mlr = sys.modules["memory_layer_robust"]
         llm = self.memory_system.llm_controller.llm  # RecordingLLM after adapter wrap
         llm.get_completion(mlr.ANALYZE_CONTENT_PROMPT.format(content=content))
@@ -105,7 +115,8 @@ class _FakeAgent:
                 )
             )
         self.added.append(content)
-        self.memory_system.memories[f"note-{len(self.added)}"] = content
+        self.memory_system.memories[f"note-{len(self.memory_system.memories) + 1}"] = content
+        self.memory_system.evo_cnt += 1
 
     def answer_question(self, question, category, answer):
         self.answer_args.append((question, category, answer))
@@ -139,6 +150,7 @@ def fake_repro(monkeypatch, tmp_path):
     _FakeAgent.answers = {}
     _FakeAgent.context_mode = "all"
     _FakeAgent.fail_build = False
+    _FakeAgent.fail_after_turns = None
 
     fake_tar = types.ModuleType("test_advanced_robust")
     fake_tar.RobustAdvancedMemAgent = _FakeAgent
@@ -166,7 +178,12 @@ def fake_repro(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "llm_text_parsers", fake_parsers)
 
     def make_adapter(**kwargs):
-        defaults = {"backend": "openai", "model": "gpt-4o-mini", "cache_dir": tmp_path / "gepa_cache"}
+        defaults = {
+            "backend": "openai",
+            "model": "gpt-4o-mini",
+            "cache_dir": tmp_path / "gepa_cache",
+            "ensure_nltk": False,  # no network in unit tests; covered by its own test below
+        }
         defaults.update(kwargs)
         return AMemGEPAAdapter(**defaults)
 
@@ -370,3 +387,135 @@ def test_truncated_and_full_builds_do_not_share_cache(fake_repro):
     adapter2 = fake_repro()
     adapter2.evaluate([truncated], CANDIDATE)
     assert adapter2.build_cache_hits == 1
+
+
+def _group(question="Where is Rex?", gold="beach"):
+    _FakeAgent.answers[question] = gold
+    return LoCoMoQuestionGroup(
+        conversation_id="conv-a", turns=TURNS, questions=[_instance(question, gold)]
+    )
+
+
+def test_interrupted_build_resumes_from_its_last_turn_checkpoint(fake_repro):
+    """docs/decisions/0017: a build killed mid-conversation continues from the
+    last checkpoint, not from turn 0, and keeps the pre-interruption trace."""
+    adapter = fake_repro(checkpoint_every_turns=1)
+    group = _group()
+    build_dir = adapter.cache_dir / candidate_hash(CANDIDATE) / f"conv-a_t{len(TURNS)}"
+    partial_state = build_dir / "partial" / "state.pkl"
+
+    _FakeAgent.fail_after_turns = 2  # dies while processing turn 3 of 3
+    first = adapter.evaluate([group], CANDIDATE, capture_traces=True)
+    assert first.scores == [0.0]
+    assert "killed mid-build" in (first.trajectories[0].error or "")
+    assert partial_state.exists(), "checkpoints after turns 1 and 2 should have been written"
+    assert adapter.builds_performed == 0
+
+    _FakeAgent.fail_after_turns = None
+    second = adapter.evaluate([group], CANDIDATE, capture_traces=True)
+    resumed_agent = _FakeAgent.instances[-1]
+    replayed = [c.split(" : ")[1] for c in resumed_agent.added]
+    assert replayed == [TURNS[2].text], "only the remaining turn replays"
+    assert len(resumed_agent.memory_system.memories) == 3
+    assert resumed_agent.memory_system.evo_cnt == 3, "evolution counter restored from checkpoint"
+    assert second.scores == [1.0]
+    kinds = [r.kind for r in second.trajectories[0].build_records]
+    assert kinds.count("note_construction") == 3, "records from before the interruption survive"
+    assert not partial_state.exists(), "a finished build discards its partial checkpoint"
+    assert adapter.builds_resumed == 1
+    assert adapter.builds_performed == 1
+
+
+def test_unusable_build_checkpoint_falls_back_to_a_full_rebuild(fake_repro):
+    adapter = fake_repro(checkpoint_every_turns=1)
+    group = _group()
+    build_dir = adapter.cache_dir / candidate_hash(CANDIDATE) / f"conv-a_t{len(TURNS)}"
+    partial_dir = build_dir / "partial"
+    partial_dir.mkdir(parents=True)
+    (partial_dir / "state.pkl").write_bytes(b"not a pickle")
+
+    result = adapter.evaluate([group], CANDIDATE)
+
+    assert result.scores == [1.0]
+    assert [c.split(" : ")[1] for c in _FakeAgent.instances[-1].added] == [t.text for t in TURNS]
+    assert adapter.builds_resumed == 0
+    assert not (partial_dir / "state.pkl").exists()
+
+
+def test_ollama_backend_forces_think_false_like_the_reproduction_does(fake_repro, monkeypatch):
+    """docs/decisions/0016's think=False patch must apply to GEPA rollouts
+    too, or qwen3.5:9b would run with thinking on here and off in the
+    baseline it is compared against."""
+    seen = []
+    fake_ollama = types.ModuleType("ollama")
+
+    def chat(*args, **kwargs):
+        seen.append(kwargs)
+        return {"message": {"content": "ok"}}
+
+    fake_ollama.chat = chat
+    monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
+
+    fake_repro(backend="ollama", model="qwen3.5:9b")
+    sys.modules["ollama"].chat(model="qwen3.5:9b", messages=[])
+
+    assert seen[0]["think"] is False
+
+
+def test_non_ollama_backend_never_imports_ollama(fake_repro, monkeypatch):
+    monkeypatch.setitem(sys.modules, "ollama", None)  # import would raise ImportError
+    fake_repro(backend="openai", model="gpt-4o-mini")
+
+
+def test_run_stats_persist_and_reload_for_a_resumed_run(fake_repro, tmp_path):
+    stats_path = tmp_path / "run" / "adapter_stats.json"
+    adapter = fake_repro(stats_path=stats_path, max_metric_calls=10)
+    adapter.evaluate([_group()], CANDIDATE)
+
+    saved = json.loads(stats_path.read_text())
+    assert saved["builds_performed"] == 1
+    assert saved["metric_calls"] == 1
+    assert saved["questions_answered"] == 1
+
+    resumed = fake_repro(stats_path=stats_path, max_metric_calls=10)
+    assert resumed.builds_performed == 1
+    assert resumed.metric_calls == 1
+    line = resumed.run_progress_line()
+    assert "metric_calls=1/10" in line
+    assert "ETA~" in line
+    assert resumed.eta_seconds() is not None
+
+
+def test_progress_lines_are_logged_for_builds_questions_and_the_run(fake_repro, caplog):
+    caplog.set_level(logging.INFO, logger="amem_gepa.gepa_adapter")
+    adapter = fake_repro(log_every=1)
+    adapter.evaluate([_group()], CANDIDATE)
+
+    text = caplog.text
+    assert f"memory-build: {len(TURNS)}/{len(TURNS)}" in text
+    assert "ETA=" in text
+    assert "QA: 1/1" in text
+    assert "[eval #1] 1 items: 1 builds, 0 cache hits, 1 questions" in text
+    assert "run: builds=1" in text
+
+
+def test_adapter_downloads_nltk_scoring_data_up_front(fake_repro, monkeypatch):
+    """The vendored calculate_metrics needs nltk's punkt_tab at call time;
+    the first real smoke run failed on the first scored question, after a
+    full build. The adapter must run the same pre-flight `just reproduce`
+    does, at construction time, before any build."""
+    import amem_gepa.gepa_adapter as mod
+
+    calls = []
+    monkeypatch.setattr(mod, "ensure_nltk_data", lambda: calls.append(1))
+
+    fake_repro(ensure_nltk=True)
+    assert calls == [1]
+
+
+def test_adapter_exposes_the_optional_gepa_protocol_hook_as_none(fake_repro):
+    """gepa's ReflectiveMutationProposer does `adapter.propose_new_texts is
+    not None` with plain attribute access; a missing attribute (not None)
+    made every reflection step fail and the smoke run propose nothing."""
+    adapter = fake_repro()
+    assert adapter.propose_new_texts is None

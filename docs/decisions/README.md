@@ -30,3 +30,5 @@ but behind no reported result.
 | [0014](0014-gepa-targets-repro-pipeline.md) | GEPA optimizes the repro pipeline's four prompts | Accepted. |
 | [0015](0015-gepa-training-method.md) | GEPA training method | Accepted. |
 | [0016](0016-disable-ollama-thinking-mode.md) | Disable Ollama thinking mode for the repro pipeline | Accepted. |
+| [0017](0017-gepa-local-model-progress-and-resume.md) | GEPA on a local Ollama model: thinking-mode parity, progress/ETA, mid-build resume | Accepted. |
+| [0018](0018-held-out-test-comparison.md) | Held-out test comparison on the repro pipeline, paired bootstrap, paper metrics | Accepted. |
