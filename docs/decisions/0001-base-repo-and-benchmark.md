@@ -2,7 +2,20 @@
 
 ## Status
 
-Accepted (2026-09-06)
+Partially superseded (2026-11-08) by
+[0013](0013-paper-reproduction-pipeline.md) and
+[0014](0014-gepa-targets-repro-pipeline.md). Originally accepted 2026-09-06.
+
+- **No longer valid:** the premise that `WujiangXu/A-mem-sys` is the paper's
+  reproduction code (it is the same library code as `agiresearch/A-mem`, see
+  [0006](0006-qa-answer-prompt.md)) and that our own harness around
+  `AgenticMemorySystem` would be the system under test. The paper's real
+  reproduction code is `WujiangXu/AgenticMemory`, vendored at
+  `external/agentic-memory-repro/` (0013); it is what `just reproduce`
+  measures and what GEPA optimizes (0014).
+- **Still in force:** LoCoMo as the v1 benchmark; `external/a-mem` stays
+  vendored as a read-only submodule for the legacy `just demo`/`just baseline`
+  development loop.
 
 ## Context
 

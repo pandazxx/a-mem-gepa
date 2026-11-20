@@ -2,7 +2,18 @@
 
 ## Status
 
-Accepted (2026-09-09)
+Legacy pipeline only (2026-11-08); the measured path has its own tracing.
+Originally accepted 2026-09-09.
+
+- **Scope today:** `trace=True` in `amem_adapter.py`/`evaluate.py` still
+  works for `just demo` exactly as described, but `just demo` is behind no
+  reported number ([0013](0013-paper-reproduction-pipeline.md),
+  [0014](0014-gepa-targets-repro-pipeline.md)).
+- **What the measured path uses instead:** `paper_repro.py`'s per-call
+  Ollama timing/content logging
+  ([0016](0016-disable-ollama-thinking-mode.md)) and `gepa_adapter.py`'s
+  LLM-call trace recording, which
+  [0015](0015-gepa-training-method.md)'s reflective dataset is built from.
 
 ## Context
 

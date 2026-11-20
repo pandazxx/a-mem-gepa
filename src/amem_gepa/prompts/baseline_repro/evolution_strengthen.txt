@@ -1,0 +1,14 @@
+Given the new memory and its neighbors, provide updated connections and tags.
+
+New memory:
+- Content: {content}
+- Keywords: {keywords}
+
+Neighbor memories:
+{nearest_neighbors_memories}
+
+Which neighbor indices should the new memory connect to? What tags best describe this memory?
+
+Respond using EXACTLY this format:
+CONNECTIONS: 0, 2, 3
+TAGS: tag1, tag2, tag3, ...

@@ -2,7 +2,19 @@
 
 ## Status
 
-Accepted (2026-09-09)
+Superseded (2026-11-08) by [0010](0010-paper-exact-f1-and-category-fix.md)
+and [0013](0013-paper-reproduction-pipeline.md). Originally accepted
+2026-09-09.
+
+- **No longer valid:** ROUGE-L as a reported metric (the paper reports F1 and
+  BLEU, 0010), and the before/after numbers in this ADR, which were computed
+  under the swapped category labels 0010 corrected. `rouge_l_f1` survives in
+  `metrics.py` as a secondary signal for the legacy pipeline only; the
+  measured path scores with the paper code's own `utils.calculate_metrics`
+  (0013).
+- **Still in force:** `just rescore` for recomputing a legacy results JSON,
+  and `evaluate_candidate` rescoring cached predictions instead of trusting
+  stored scores.
 
 ## Context
 

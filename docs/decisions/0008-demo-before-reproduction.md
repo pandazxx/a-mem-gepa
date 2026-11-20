@@ -2,7 +2,19 @@
 
 ## Status
 
-Accepted (2026-09-07)
+Superseded for the measured path (2026-11-08) by
+[0015](0015-gepa-training-method.md)'s smoke mode; `just demo` remains a
+legacy development tool. Originally accepted 2026-09-07.
+
+- **No longer valid:** "`just demo` first, then `just baseline`" as the
+  workflow before an expensive run. `just baseline` is no longer the
+  reproduction ([0013](0013-paper-reproduction-pipeline.md)), and `just demo`
+  exercises the `agiresearch/A-mem` library pipeline, so a sane demo says
+  nothing about the repro pipeline GEPA actually optimizes
+  ([0014](0014-gepa-targets-repro-pipeline.md)).
+- **Still in force:** the principle -- a cheap truncated-conversation
+  plumbing check before real spend -- now implemented as `just gepa-smoke`
+  (0015), which reuses this ADR's evidence-complete question sampler.
 
 ## Context
 

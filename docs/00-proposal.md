@@ -62,8 +62,12 @@ adversarial) rather than uniformly across all categories.
    correctness check before trusting the harness for anything else, then run
    the actual A-MEM-original-prompts baseline on the test split.
 3. **Decide the GEPA trainset composition** — how `AMemGEPAAdapter.evaluate()`
-   samples from the 5 train conversations per rollout batch. Deferred; not
-   yet an ADR, revisit before starting milestone 4.
+   samples from the 5 train conversations per rollout batch. Decided: see
+   [decisions/0014](decisions/0014-gepa-targets-repro-pipeline.md) (which
+   pipeline/prompts GEPA optimizes) and
+   [decisions/0015](decisions/0015-gepa-training-method.md) (grouped
+   minibatches, fixed val subset, build-count budgeting, adversarial
+   reward direction).
 4. **GEPA adapter + optimization run** — fill in `gepa_adapter.py`, run a
    confirmed-budget GEPA optimization (see CLAUDE.md's "Cost awareness").
 5. **Comparative analysis** — baseline vs. GEPA-optimized on the held-out

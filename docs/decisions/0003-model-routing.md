@@ -2,7 +2,18 @@
 
 ## Status
 
-Accepted (2026-09-06)
+Partially superseded (2026-11-08) by
+[0013](0013-paper-reproduction-pipeline.md) and
+[0014](0014-gepa-targets-repro-pipeline.md). Originally accepted 2026-09-06.
+
+- **No longer valid:** "LiteLLM routes every LLM call in this project." The
+  measured path -- `just reproduce`, `just k-sweep`, and GEPA's task rollouts
+  -- runs the vendored repro code's own `RobustLLMController`, configured by
+  `PAPER_REPRO_BACKEND`/`PAPER_REPRO_MODEL` (bare model names, not LiteLLM
+  strings); see 0013 for the `OLLAMA_HOST`/`OPENAI_BASE_URL` details.
+- **Still in force:** LiteLLM routes GEPA's `reflection_lm`
+  (`GEPA_REFLECTION_LM`) and the legacy `just demo`/`just baseline` pipeline
+  (`AMEM_LLM_MODEL`, `llm/litellm_controller.py`).
 
 ## Context
 

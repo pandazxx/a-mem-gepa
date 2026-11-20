@@ -1,0 +1,22 @@
+Given the new memory and its neighbor memories, update each neighbor's context and tags based on a holistic understanding of all these memories together.
+
+New memory:
+- Content: {content}
+- Context: {context}
+
+Neighbor memories:
+{nearest_neighbors_memories}
+
+For each neighbor (indexed 0 to {max_neighbor_idx}), provide updated context and tags. If no change is needed, repeat the original values.
+
+Respond using EXACTLY this format (one block per neighbor):
+
+NEIGHBOR 0:
+CONTEXT: updated context sentence
+TAGS: tag1, tag2, tag3
+
+NEIGHBOR 1:
+CONTEXT: updated context sentence
+TAGS: tag1, tag2, tag3
+
+(continue for all {neighbor_count} neighbors)

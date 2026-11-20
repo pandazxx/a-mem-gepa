@@ -3,8 +3,12 @@ set dotenv-load := true
 default:
     @just --list
 
-# Install/sync Python dependencies
+# Install/sync Python dependencies. Initializes both git submodules first:
+# external/a-mem is an editable uv dependency (pyproject.toml), so with an
+# empty submodule `uv sync` fails with "does not appear to be a Python
+# project"; the repro pipeline needs external/agentic-memory-repro too.
 setup:
+    git submodule update --init --recursive
     uv sync
 
 # Fast end-to-end sanity demo: one truncated conversation, a few questions
@@ -34,13 +38,37 @@ reproduce config="configs/base.yaml":
 k-sweep config="configs/base.yaml":
     uv run python scripts/run_k_sweep.py --config {{config}}
 
-# Run a GEPA optimization job (costs real API calls — confirm budget first)
-gepa-optimize config="configs/base.yaml":
-    uv run python scripts/run_gepa_optimize.py --config {{config}}
+# Run a GEPA optimization job (costs real API calls — confirm budget first).
+# Without extra args this only PRINTS the run plan; append `--yes` to start:
+#   just gepa-optimize configs/base.yaml --yes
+gepa-optimize config="configs/base.yaml" *args="":
+    uv run python scripts/run_gepa_optimize.py --config {{config}} {{args}}
 
-# Evaluate a specific prompt candidate on the test set
+# Tiny GEPA sanity run on truncated conversations (gepa_smoke config
+# section) -- validates the whole loop before committing days to a real
+# run. Numbers are meaningless; plumbing only. Still needs --yes to start:
+#   just gepa-smoke configs/base.yaml --yes
+gepa-smoke config="configs/base.yaml" *args="":
+    uv run python scripts/run_gepa_optimize.py --config {{config}} --smoke {{args}}
+
+# LEGACY library pipeline only (agiresearch/A-mem, 2-prompt candidates with
+# note_construction.txt + evolution.txt; docs/decisions/0013). It CANNOT run a
+# 4-prompt GEPA candidate and is behind no reported number -- for the real
+# held-out comparison use `just gepa-test-eval` below.
 eval candidate config="configs/base.yaml":
     uv run python scripts/run_eval.py --candidate {{candidate}} --config {{config}}
+
+# Held-out test comparison on the paper-reproduction pipeline (docs/decisions/
+# 0018): the paper's baseline prompts vs. a GEPA candidate directory (the 4
+# files under results/<run>/best_candidate/), every question of the 3 test
+# conversations, the paper's metric suite, both adversarial readings, paired
+# bootstrap CI. Costs ~6 memory builds; needs --yes to start:
+#   just gepa-test-eval results/gepa-qwen35-9b-v1/best_candidate --yes
+# Config is fixed to configs/base.yaml here (unlike the other recipes) so that
+# flags can follow the candidate directly; pass `--config other.yaml` in the
+# flags to override (the last --config wins).
+gepa-test-eval candidate *args="":
+    uv run python scripts/run_gepa_test_eval.py --config configs/base.yaml --candidate {{candidate}} {{args}}
 
 # Regenerate the LoCoMo train/val/test split manifest (see docs/decisions/0004)
 split:

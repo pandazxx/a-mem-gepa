@@ -2,7 +2,18 @@
 
 ## Status
 
-Accepted (2026-09-06)
+Superseded for the measured path (2026-11-08) by
+[0013](0013-paper-reproduction-pipeline.md); remains in force only for the
+legacy library pipeline. Originally accepted 2026-09-06.
+
+- **No longer valid:** per-turn note snapshots (`checkpoint.py`) as the
+  project's resumability mechanism. `just reproduce` uses the paper code's
+  own per-conversation memory pickles plus this project's per-question QA
+  progress log (0013); GEPA caches whole builds per (candidate, conversation)
+  ([0015](0015-gepa-training-method.md)).
+- **Still in force:** `progress.py`/`checkpoint.py`/`PredictionStore` behave
+  as described for `just demo`/`just baseline`, which are behind no reported
+  number.
 
 ## Context
 

@@ -2,7 +2,21 @@
 
 ## Status
 
-Accepted (2026-09-06)
+Superseded (2026-11-08) by [0013](0013-paper-reproduction-pipeline.md) and
+experiments [001](../experiments/001-m2-llama3.2-1b-full-reproduction.md) /
+[002](../experiments/002-m2-gpt4o-mini-reproduction.md). Originally accepted
+2026-09-06.
+
+- **What happened instead:** the reproduction was not run through "our own
+  harness" (`just baseline`) but through the paper's own code
+  (`just reproduce`, 0013). Llama 3.2:1b was the first model run that way
+  (experiments/001), so the model choice itself held; but the verified
+  baseline that GEPA is compared against is GPT-4o-mini via OpenRouter
+  (experiments/002, named as the baseline in
+  [0014](0014-gepa-targets-repro-pipeline.md)), not Llama 3.2:1b.
+- **Moot:** the JSON-parse-failure fallback to Qwen2.5:1.5b. The repro
+  pipeline's prompts are plain-text parsed, not strict JSON, so the failure
+  mode this ADR planned around does not exist on the measured path.
 
 ## Context
 

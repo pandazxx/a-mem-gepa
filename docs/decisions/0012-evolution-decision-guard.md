@@ -2,7 +2,20 @@
 
 ## Status
 
-Accepted (2026-09-09)
+Legacy pipeline only (2026-11-08). Originally accepted 2026-09-09.
+
+- **Not applicable to the measured path:**
+  [0013](0013-paper-reproduction-pipeline.md) verified that the paper's own
+  code (`external/agentic-memory-repro/`) passes `suggested_connections` as
+  integer positions matching the "memory index: N" labels in the prompt and
+  consumes them consistently, so the ID/index fabrication this guard rejects
+  is specific to `agiresearch/A-mem`'s packaging. `_EvolutionGuardBackend`
+  stays active for `just demo`/`just baseline` only.
+- **Obsolete consequence:** using the guard's rejection rate as a GEPA
+  signal. GEPA does not run through `amem_adapter.py`
+  ([0014](0014-gepa-targets-repro-pipeline.md)); the analogous signals there
+  are the repro parsers' fall-back-to-no-evolution behaviour and 0014's
+  template validation.
 
 ## Context
 
