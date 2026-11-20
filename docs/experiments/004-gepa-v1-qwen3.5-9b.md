@@ -131,8 +131,13 @@ best, 0.3784, and the seed, 0.3221, are known). They are in the pickled
 GEPA state, not in either JSON:
 
 ```
-uv run python -c "import pickle; d=pickle.load(open('results/gepa-qwen35-9b-v1/gepa_state.bin','rb')); print([round(x,4) for x in d['program_full_scores_val_set']])"
+uv run python -c "import pickle,statistics; d=pickle.load(open('results/gepa-qwen35-9b-v1/gepa_state.bin','rb')); print([(i, len(s), round(statistics.mean(s.values()),4)) for i,s in enumerate(d['prog_candidate_val_subscores'])])"
 ```
+
+(The pickle is `GEPAState.__dict__`; `program_full_scores_val_set` is a
+property over `prog_candidate_val_subscores`, a per-candidate
+`{val_question_id: score}` map, so the mean of each map's values is the
+aggregate GEPA ranks by. Prints `(candidate, n_val_questions, aggregate)`.)
 
 ## Before/after prompt diff
 
