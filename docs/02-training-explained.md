@@ -288,6 +288,68 @@ the downstream consequence (the question that later failed because that
 card was never found). The brace and format rules from section 5 are
 appended to every entry so the coach never forgets them.
 
+#### The reflection prompt, verbatim
+
+The adapter does not supply its own proposer (`propose_new_texts = None`)
+or a `reflection_prompt_template`, so the reflection model receives
+GEPA's default template (`gepa/strategies/instruction_proposal.py`,
+gepa 0.1.4):
+
+```
+I provided an assistant with the following instructions to perform a task for me:
+```
+<curr_param>
+```
+
+The following are examples of different task inputs provided to the assistant along with the assistant's response for each of them, and some feedback on how the assistant's response could be better:
+```
+<side_info>
+```
+
+Your task is to write a new instruction for the assistant.
+
+Read the inputs carefully and identify the input format and infer detailed task description about the task I wish to solve with the assistant.
+
+Read all the assistant responses and the corresponding feedback. Identify all niche and domain specific factual information about the task and include it in the instruction, as a lot of it may not be available to the assistant in the future. The assistant may have utilized a generalizable strategy to solve the task, if so, include that in the instruction as well.
+
+Provide the new instructions within ``` blocks.
+```
+
+`<curr_param>` is the current text of the one component being rewritten.
+`<side_info>` is `make_reflective_dataset`'s output for that component
+(at most `max_reflection_examples`, default 5), rendered by GEPA as
+markdown: `# Example N`, then `## Inputs`, `## Generated Outputs`,
+`## Feedback`. For note construction an example looks like:
+
+```
+# Example 1
+## Inputs
+### turn_content (the {content} input)
+Rex loves the beach in June
+### question_later_asked
+Where does Rex like to go?
+## Generated Outputs
+KEYWORDS: Rex, June
+CONTEXT: Rex enjoys a seasonal activity.
+TAGS: pets, summer
+## Feedback
+A later single_hop question ('Where does Rex like to go?', gold 'the beach')
+FAILED (predicted 'the park', score 0.00) and this evidence turn was NOT
+among the retrieved memories. The keywords/context/tags produced below are
+what retrieval embeds and matches against -- they did not surface this turn
+for that question. Dates/times, entities, and relations the question hinges
+on need to be recoverable from them. CONSTRAINT: the rewritten prompt is a
+Python str.format template and must contain exactly these placeholders:
+{content} -- no other placeholders, and any literal brace must be doubled
+('{{' / '}}'). It must also keep an explicitly parseable output format,
+since the response is consumed by a fixed plain-text parser.
+```
+
+The model's reply is parsed for the last fenced block, which becomes the
+new text of that component. The template is GEPA's, not ours; replacing
+it (`reflection_prompt_template=` in `gepa.optimize`) would be a separate,
+recorded decision.
+
 ### 6.4 The adversarial twist
 
 The paper's own scoring for trap questions is ambiguous: its code scores

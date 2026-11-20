@@ -239,6 +239,22 @@ in the experiment write-ups:
   This stops rare question types from being averaged away. The technical
   name is the Pareto front.
 
+**What the coach is actually told.** The coach receives one message,
+built from a fixed template that ships with the GEPA library. In plain
+words it says: "Here is the instruction sheet the librarian was given.
+Here are some examples of what the librarian was asked, what it produced,
+and feedback on how that could have been better. Write a new instruction
+sheet; keep any task-specific facts and any strategy that worked." The
+examples are the game tape from section 3, at most five per round, each
+with three parts: the input (the message, and the question later asked
+about it), the librarian's output (the card it wrote), and the feedback
+(which question failed, what was answered, what was correct, and whether
+the card was even pulled up). Every example ends with a reminder of the
+two hard rules: keep the fill-in-the-blank slots exactly as they are,
+and keep the answer format the fixed parser can read. The coach's reply
+is the new sheet, nothing else. The template is quoted verbatim in
+[02-training-explained.md](02-training-explained.md), section 6.3.
+
 The ten conversations in the dataset are split once and for all:
 
 | conversations | used for | who sees them |
