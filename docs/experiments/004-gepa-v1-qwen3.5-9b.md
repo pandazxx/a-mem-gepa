@@ -82,21 +82,21 @@ From `results/gepa-qwen35-9b-v1/run_log.json` + `candidates.json`
 (39 iterations, 14 candidates, 13 accepted proposals; minibatch scores
 below are the sum over the 2 groups of an iteration, so 2.0 is perfect):
 
-| iter | parent | minibatch before → after | accepted as | component rewritten |
-|---|---|---|---|---|
-| 2 | 0 | 0.93 → 0.97 | 1 | evolution_strengthen |
-| 3 | 1 | 0.88 → 0.92 | 2 | evolution_update_neighbors |
-| 5 | 1 | 1.05 → 1.16 | 3 | evolution_decision |
-| 10 | 0 | 0.76 → 0.92 | 4 | evolution_decision |
-| 11 | 4 | 0.71 → 0.89 | 5 | evolution_strengthen |
-| 13 | 1 | 1.03 → 1.22 | 6 | evolution_update_neighbors |
-| 21 | 4 | 0.48 → 0.93 | 7 | evolution_update_neighbors |
-| 24 | 2 | 0.53 → 0.70 | 8 | note_construction |
-| 25 | 3 | 1.04 → 1.07 | 9 | evolution_update_neighbors |
-| 27 | 5 | 0.63 → 0.69 | 10 | note_construction |
-| 33 | 1 | 0.95 → 1.20 | 11 | evolution_strengthen |
-| 34 | 11 | 0.69 → 0.85 | 12 | evolution_update_neighbors |
-| 38 | 11 | 0.69 → 0.78 | 13 | evolution_decision |
+| iter | parent (val) | minibatch before → after | accepted as | component rewritten | child full-val aggregate |
+|---|---|---|---|---|---|
+| 2 | 0 (0.3221) | 0.93 → 0.97 | 1 | evolution_strengthen | **0.2871** (-0.0350 vs parent) |
+| 3 | 1 (0.2871) | 0.88 → 0.92 | 2 | evolution_update_neighbors | **0.3642** (+0.0771 vs parent) |
+| 5 | 1 (0.2871) | 1.05 → 1.16 | 3 | evolution_decision | **0.3250** (+0.0379 vs parent) |
+| 10 | 0 (0.3221) | 0.76 → 0.92 | 4 | evolution_decision | **0.3321** (+0.0100 vs parent) |
+| 11 | 4 (0.3321) | 0.71 → 0.89 | 5 | evolution_strengthen | **0.3387** (+0.0066 vs parent) |
+| 13 | 1 (0.2871) | 1.03 → 1.22 | 6 | evolution_update_neighbors | **0.3206** (+0.0335 vs parent) |
+| 21 | 4 (0.3321) | 0.48 → 0.93 | 7 | evolution_update_neighbors | **0.3216** (-0.0105 vs parent) |
+| 24 | 2 (0.3642) | 0.53 → 0.70 | 8 | note_construction | **0.3721** (+0.0079 vs parent) |
+| 25 | 3 (0.3250) | 1.04 → 1.07 | 9 | evolution_update_neighbors | **0.3541** (+0.0291 vs parent) |
+| 27 | 5 (0.3387) | 0.63 → 0.69 | 10 | note_construction | **0.3502** (+0.0115 vs parent) |
+| 33 | 1 (0.2871) | 0.95 → 1.20 | 11 | evolution_strengthen | **0.3741** (+0.0870 vs parent) |
+| 34 | 11 (0.3741) | 0.69 → 0.85 | 12 | evolution_update_neighbors | **0.3301** (-0.0440 vs parent) |
+| 38 | 11 (0.3741) | 0.69 → 0.78 | 13 | evolution_decision | **0.3784** (+0.0043 vs parent) |
 
 Lineage of the final best: **13 ← 11 ← 1 ← 0** (seed → strengthen rewrite →
 strengthen rewrite → decision rewrite). Candidate 13 therefore differs from
@@ -126,18 +126,39 @@ What the log shows about the search itself:
   a coin flip on noise -- consistent with the validation gain not
   transferring to test.
 
-**Still missing**: each candidate's *full validation* aggregate (only the
-best, 0.3784, and the seed, 0.3221, are known). They are in the pickled
-GEPA state, not in either JSON:
+Seed full-validation aggregate: **0.3221** (138 questions). Per-candidate
+aggregates above come from `gepa_state.bin` (`prog_candidate_val_subscores`;
+the snippet below prints them).
+
+What the full-validation column adds:
+
+- **The final gain came from one rewrite.** Along the winning lineage
+  0 → 1 → 11 → 13 the aggregates are 0.3221 → **0.2871** → 0.3741 → 0.3784:
+  candidate 1 was 3.5 points *worse* than the seed, candidate 11's
+  strengthen rewrite then jumped +8.7 over its parent, and candidate 13's
+  decision rewrite added +0.4. Essentially the whole +5.6 over the seed is
+  one iteration-33 rewrite of the strengthen prompt.
+- **Minibatch acceptance let a regression through.** Candidate 1 won its
+  2-group minibatch (0.93 → 0.97) yet lost 3.5 points on the full 138
+  questions. Three of the 13 accepted children (1, 6, 7) were below the
+  seed on full validation; a fourth (3) was within noise of it. A 2-group
+  minibatch is too small a gate.
+- **The Pareto lottery kept picking the worst candidate.** Candidate 1 was
+  parent in 8 of 39 iterations despite the lowest aggregate of all 14,
+  because it was the per-question best on enough individual validation
+  questions. That is Pareto selection working as designed -- it protects
+  specialists -- but on a 138-question set from 2 conversations it mostly
+  protected noise.
+- A second lineage, 8 ← 2 ← 1 (0.3721, note-construction rewrite on top of
+  an update-neighbors rewrite), reached nearly the same validation score
+  through entirely different prompts. Two unrelated candidates at ~0.375
+  on validation, and the one that was tested landing at -2.3 on test under
+  the same objective, is further evidence the validation set, not the
+  prompts, was being fit.
 
 ```
 uv run python -c "import pickle,statistics; d=pickle.load(open('results/gepa-qwen35-9b-v1/gepa_state.bin','rb')); print([(i, len(s), round(statistics.mean(s.values()),4)) for i,s in enumerate(d['prog_candidate_val_subscores'])])"
 ```
-
-(The pickle is `GEPAState.__dict__`; `program_full_scores_val_set` is a
-property over `prog_candidate_val_subscores`, a per-candidate
-`{val_question_id: score}` map, so the mean of each map's values is the
-aggregate GEPA ranks by. Prints `(candidate, n_val_questions, aggregate)`.)
 
 ## Before/after prompt diff
 
@@ -241,9 +262,6 @@ with a 9B reflector: nothing measurable.
 Candidate 13 is **not adopted** as a new baseline. Next steps, in order of
 expected information per hour:
 
-- Pull each candidate's full-validation aggregate out of `gepa_state.bin`
-  (snippet in "Pareto front summary") to see whether validation scores
-  climbed steadily or jumped on one accepted rewrite.
 - Inspect one cached build trace for the ~1,900 calls/build figure: if
   the plain-text parsers are falling back to retries on most turns, the
   reflection dossiers are being built from degraded outputs.
