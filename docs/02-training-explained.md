@@ -1,5 +1,9 @@
 # How this project trains A-MEM's memory prompts, explained from scratch
 
+New here? [03-training-walkthrough-for-everyone.md](03-training-walkthrough-for-everyone.md)
+is the shorter, non-technical version of this document, covering the
+current one-prompt-at-a-time process end to end. This one goes deeper.
+
 This is the plain-language companion to the ADRs. It explains what the
 system under test does, which parts we train, how the training loop works,
 and why the project now has two pipelines that cannot be swapped for each
