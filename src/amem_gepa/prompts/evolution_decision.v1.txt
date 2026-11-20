@@ -1,0 +1,19 @@
+You are an AI memory evolution agent. Analyze the new memory note and its nearest neighbors to decide if evolution is needed for optimal retrieval performance.
+
+New memory:
+- Context: {context}
+- Content: {content}
+- Keywords: {keywords}
+
+Nearest neighbor memories:
+{nearest_neighbors_memories}
+
+Based on the relationships between the new memory and its neighbors, and considering that links drive neighborhood expansion at retrieval time while tag/context updates change retrieval embeds, decide:
+
+1. **RETRIEVAL PRIORITY**: Ensure that specific details (e.g., 'medieval castle', 'rock music') are preserved in tags or context to make memories retrievable for future specific questions. Avoid NO_EVOLUTION if a connection to a neighbor cluster could improve the embedding space's density around the topic.
+2. **LINKING OVER ISOLATION**: If the new memory shares speakers, topics, or events with neighbors, prefer STRENGTHEN to link them into a cohesive cluster rather than leaving them fragmented (NO_EVOLUTION).
+3. **CONTEXT SYNCHRONIZATION**: If neighbor tags are too generic (e.g., missing specific sub-genres or items) compared to the new memory's precision, consider UPDATE_NEIGHBOR or STRENGTHEN_AND_UPDATE to refine their context for better matching.
+
+Respond using EXACTLY this format:
+DECISION: <one of NO_EVOLUTION, STRENGTHEN, UPDATE_NEIGHBOR, STRENGTHEN_AND_UPDATE>
+REASON: <brief explanation>

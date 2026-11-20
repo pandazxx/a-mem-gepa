@@ -78,20 +78,108 @@ k=10 (ADR 0018's comparability note).
 
 ## Pareto front summary
 
-14 candidates after 39 iterations (13 accepted proposals). Final best by
-validation aggregate: candidate 13, which was also the "linear Pareto front
-program index" at the last logged iteration. **TODO:** per-candidate
-validation aggregates and which component each accepted proposal changed —
-available in `results/gepa-qwen35-9b-v1/run_log.json` /
-`candidates.json`; not pasted into this doc yet.
+From `results/gepa-qwen35-9b-v1/run_log.json` + `candidates.json`
+(39 iterations, 14 candidates, 13 accepted proposals; minibatch scores
+below are the sum over the 2 groups of an iteration, so 2.0 is perfect):
+
+| iter | parent | minibatch before → after | accepted as | component rewritten |
+|---|---|---|---|---|
+| 2 | 0 | 0.93 → 0.97 | 1 | evolution_strengthen |
+| 3 | 1 | 0.88 → 0.92 | 2 | evolution_update_neighbors |
+| 5 | 1 | 1.05 → 1.16 | 3 | evolution_decision |
+| 10 | 0 | 0.76 → 0.92 | 4 | evolution_decision |
+| 11 | 4 | 0.71 → 0.89 | 5 | evolution_strengthen |
+| 13 | 1 | 1.03 → 1.22 | 6 | evolution_update_neighbors |
+| 21 | 4 | 0.48 → 0.93 | 7 | evolution_update_neighbors |
+| 24 | 2 | 0.53 → 0.70 | 8 | note_construction |
+| 25 | 3 | 1.04 → 1.07 | 9 | evolution_update_neighbors |
+| 27 | 5 | 0.63 → 0.69 | 10 | note_construction |
+| 33 | 1 | 0.95 → 1.20 | 11 | evolution_strengthen |
+| 34 | 11 | 0.69 → 0.85 | 12 | evolution_update_neighbors |
+| 38 | 11 | 0.69 → 0.78 | 13 | evolution_decision |
+
+Lineage of the final best: **13 ← 11 ← 1 ← 0** (seed → strengthen rewrite →
+strengthen rewrite → decision rewrite). Candidate 13 therefore differs from
+the seed in exactly two of the four prompts; note construction and
+update-neighbors are byte-identical to the paper's.
+
+What the log shows about the search itself:
+
+- **Parent selection**: the seed was chosen as parent in 11 of 39
+  iterations, candidate 1 in 8, candidate 3 in 7 -- the Pareto lottery kept
+  going back to early, broadly-good candidates rather than chasing the
+  latest accepted one.
+- **Component choice**: accepted rewrites were update-neighbors ×5,
+  strengthen ×3, decision ×3, note construction ×2.
+- **8 of 39 children scored exactly 0** on their minibatch (iters 4, 6,
+  12, 14, 23, 26, 35, 36). A build cannot legitimately score 0 across ~30
+  questions, so these are almost certainly template-validation rejections
+  (0014: a rewrite that drops/invents a `{placeholder}` scores 0 without
+  running) -- i.e. ~20% of reflection calls produced an unusable template.
+  Each still cost the parent's minibatch rollout.
+- **6 iterations (15-20) logged no child scores at all** -- these coincide
+  with the interruption/resume boundary (the resumed log starts at
+  iteration 23); treat them as lost iterations.
+- **Minibatch gains were small and noisy**: typical accepted improvement
+  was +0.05 to +0.2 on a 0-2 scale over ~30 questions, i.e. a few
+  questions flipping. With 2 groups per minibatch, acceptance is close to
+  a coin flip on noise -- consistent with the validation gain not
+  transferring to test.
+
+**Still missing**: each candidate's *full validation* aggregate (only the
+best, 0.3784, and the seed, 0.3221, are known). They are in the pickled
+GEPA state, not in either JSON:
+
+```
+uv run python -c "import pickle; d=pickle.load(open('results/gepa-qwen35-9b-v1/gepa_state.bin','rb')); print([round(x,4) for x in d['program_full_scores_val_set']])"
+```
 
 ## Before/after prompt diff
 
-**TODO.** The four files under `results/gepa-qwen35-9b-v1/best_candidate/`
-have not been committed. Per CLAUDE.md they should land as
-`src/amem_gepa/prompts/<component>.v1.txt` in this PR, and the diff against
-`prompts/baseline_repro/` goes here, even though the candidate is not
-adopted (section "Conclusion") — the history is the point.
+Candidate 13 is committed as `src/amem_gepa/prompts/{note_construction,
+evolution_decision,evolution_strengthen,evolution_update_neighbors}.v1.txt`
+(the two unchanged components are committed too, so v1 is a complete
+candidate). `diff src/amem_gepa/prompts/baseline_repro/X.txt src/amem_gepa/prompts/X.v1.txt`
+for the full text; the substance:
+
+**evolution_decision** (788 → 1,406 chars). The four-option menu is kept
+verbatim, but the neutral "decide:" preamble became three numbered
+directives that *bias against NO_EVOLUTION*: "RETRIEVAL PRIORITY ...
+Avoid NO_EVOLUTION if a connection to a neighbor cluster could improve the
+embedding space's density", "LINKING OVER ISOLATION ... prefer STRENGTHEN
+to link them into a cohesive cluster rather than leaving them fragmented",
+"CONTEXT SYNCHRONIZATION ... consider UPDATE_NEIGHBOR or
+STRENGTHEN_AND_UPDATE". The reflection LM has clearly absorbed the
+dossier's framing ("links drive neighborhood expansion at retrieval time",
+"tag/context updates change retrieval embeds" are the adapter's own
+feedback sentences, 0015) and turned it into "evolve more".
+
+**evolution_strengthen** (363 → 2,810 chars, ~8x). From a two-line
+instruction to a role statement ("optimizing a memory knowledge graph for
+future retrieval performance ... multi-hop questions"), a three-step task
+list (extract entities/dates/objects/counts; link neighbors sharing
+speaker, complementary facts or temporal proximity, "avoid ... broad theme
+similarity"; emit specific lowercase tags), and a long output-constraints
+block. Two details worth flagging:
+
+- "generally aim for at least one connection" -- together with the
+  decision prompt's anti-NO_EVOLUTION bias, the trained candidate links
+  more aggressively than the seed. More links means more neighborhood
+  expansion at answer time: more text in the QA context, including
+  plausible-but-irrelevant text. That is a mechanism by which the
+  adversarial regression (model picks the trap more often, section
+  "Results") could arise -- a hypothesis, not checked against traces.
+- The example indices changed from the seed's `CONNECTIONS: 0, 2, 3` to
+  `CONNECTIONS: 177, 309` -- copied from a reflective-dataset example. In
+  this pipeline the neighbors are labelled with their *global* position
+  ("memory index: 177"), and `parse_strengthen_details` does no range
+  check, so large indices are legal and the seed's `0, 2, 3` example was
+  the misleading one. No bug, but a reminder that the reflection LM
+  copies whatever concrete examples it is shown.
+
+**note_construction, evolution_update_neighbors**: unchanged from the seed
+in the final candidate (both were rewritten in other lineages -- 8, 10 and
+2, 6, 7, 9, 12 -- that did not win).
 
 ## Cost
 
@@ -110,10 +198,17 @@ Training (`summary.json` / `adapter_stats.json`, whole run across resumes):
 | LLM calls | 188,865 (≈1,900 per build after subtracting ~2 per question — high; suggests frequent parser-fallback retries, not yet inspected) |
 | metric calls | 2,216 / 2,000 budget; 88 evaluations |
 
-Test comparison: 6 fresh builds (3 test conversations × 2 arms) + 1,192
-answered questions. **TODO:** actual wall-clock from
-`results/test_eval_gepa-qwen35-9b-v1_test/test_eval.json` → `adapter_stats`
-(estimate from training rates: ~9 h builds + ~2 h QA).
+Test comparison (`test_eval.json` → `adapter_stats`): 6 fresh builds
+(3 test conversations × 2 arms), **12,783 s = 3.55 h of building, ~35.5
+min/build** -- well under the training average of 89 min/build, so the
+test conversations are shorter and/or trigger less evolution than the
+training ones (the pre-run estimate of ~9 h for builds was therefore ~2.5x
+pessimistic). 9,804 LLM calls during builds (~1,634/build). QA time and
+question count were **not recorded** by this first version of the tool
+(it bypassed the adapter's own accounting; fixed in the same PR after this
+run -- `questions_answered=0 / qa_seconds=0` in the stats file is an
+instrumentation gap, not a fact about the run). Estimate from training's
+6 s/question: 1,192 questions ≈ 2 h.
 
 The 89 min/build figure is 4x the 6–25 min extrapolated from the smoke
 run's 3.5 s/turn (ADR 0017's consequences section): full conversations
@@ -141,8 +236,9 @@ with a 9B reflector: nothing measurable.
 Candidate 13 is **not adopted** as a new baseline. Next steps, in order of
 expected information per hour:
 
-- Fill the two remaining TODOs above (prompt diff, Pareto table) — from
-  files already on disk, no compute.
+- Pull each candidate's full-validation aggregate out of `gepa_state.bin`
+  (snippet in "Pareto front summary") to see whether validation scores
+  climbed steadily or jumped on one accepted rewrite.
 - Inspect one cached build trace for the ~1,900 calls/build figure: if
   the plain-text parsers are falling back to retries on most turns, the
   reflection dossiers are being built from degraded outputs.

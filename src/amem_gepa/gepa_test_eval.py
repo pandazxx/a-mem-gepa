@@ -99,6 +99,14 @@ def append_progress(path: Path, result: QuestionResult) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _recorded_calls(agent) -> int:
+    """LLM calls recorded so far by the adapter's RecordingLLM wrappers (0 if
+    the build failed and there is no agent)."""
+    if agent is None:
+        return 0
+    return len(agent.memory_system.llm_controller.llm.records) + len(agent.retriever_llm.llm.records)
+
+
 def _by_conversation(instances: list[LoCoMoInstance]) -> dict[str, list[LoCoMoInstance]]:
     out: dict[str, list[LoCoMoInstance]] = {}
     for inst in instances:
@@ -152,6 +160,7 @@ def evaluate_arm(
 
         for q_idx, q in pending:
             started = time.monotonic()
+            calls_before = _recorded_calls(agent)
             reference = reference_answer(q)
             if build_error is not None:
                 result = QuestionResult(
@@ -180,9 +189,18 @@ def evaluate_arm(
                 )  # fmt: skip
             append_progress(path, result)
             results.append(result)
-            tracker.record(time.monotonic() - started, cached=False)
+            elapsed = time.monotonic() - started
+            tracker.record(elapsed, cached=False)
+            # Keep the adapter's run accounting truthful for this tool too
+            # (it only counts QA inside its own evaluate()): the first real
+            # test eval reported questions_answered=0 / qa_seconds=0.
+            adapter.questions_answered += 1
+            adapter.qa_seconds += elapsed
+            adapter.llm_calls += _recorded_calls(agent) - calls_before
             if tracker.completed_units % log_every == 0 or tracker.completed_units == len(instances):
                 logger.info(tracker.progress_line(extra=f"conv={conv_id} cat={q.category}"))
+        adapter._save_stats()
+    logger.info("[%s] done | %s", arm, adapter.run_progress_line())
     return results
 
 

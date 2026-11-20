@@ -41,8 +41,13 @@ def test_run_test_eval_scores_both_arms_and_writes_report(fake_repro, tmp_path):
     # Identical answers in both arms -> zero difference with a zero-width interval.
     bs = report["bootstrap_f1"]["overall"]
     assert bs["n"] == 3 and bs["diff_mean"] == 0.0 and bs["ci_low"] == 0.0 == bs["ci_high"]
-    # One build per (arm, conversation).
+    # One build per (arm, conversation); QA accounted for even though this
+    # tool bypasses adapter.evaluate() (first real run reported 0 questions).
     assert adapter.builds_performed == 4
+    assert adapter.questions_answered == 6
+    assert adapter.qa_seconds > 0
+    assert adapter.llm_calls > 0
+    assert report["adapter_stats"]["questions_answered"] == 6
     assert (tmp_path / "out" / "test_eval.json").exists()
     table = (tmp_path / "out" / "summary.md").read_text()
     assert "| single_hop | 2 |" in table and "refusal reading" in table
