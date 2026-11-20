@@ -44,6 +44,17 @@ k-sweep config="configs/base.yaml":
 gepa-optimize config="configs/base.yaml" *args="":
     uv run python scripts/run_gepa_optimize.py --config {{config}} {{args}}
 
+# GEPA on ONE memory prompt, the other three frozen at the seed
+# (docs/decisions/0019). Run the stages in order, each seeded from the
+# previous stage's committed winner; without --yes this only prints the plan:
+#   just gepa-optimize-component note_construction --yes
+#   just gepa-optimize-component evolution_decision \
+#       --seed-file note_construction=src/amem_gepa/prompts/note_construction.v1.txt --yes
+# Config is fixed to configs/base.yaml so flags can follow the component;
+# pass `--config other.yaml` in the flags to override (the last --config wins).
+gepa-optimize-component component *args="":
+    uv run python scripts/run_gepa_optimize.py --config configs/base.yaml --component {{component}} {{args}}
+
 # Tiny GEPA sanity run on truncated conversations (gepa_smoke config
 # section) -- validates the whole loop before committing days to a real
 # run. Numbers are meaningless; plumbing only. Still needs --yes to start:

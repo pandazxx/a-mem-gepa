@@ -6,6 +6,10 @@ Accepted (2026-09-19). Supersedes the "which pipeline / how many prompts"
 part of [0002](0002-optimization-targets.md); 0002's baseline-is-verbatim
 and joint-optimization decisions still stand.
 
+Component selection refined by [0019](0019-sequential-single-prompt-training.md)
+(2026-11-20): the four components stand, but a run optimizes one of them
+with the other three frozen, instead of GEPA's round-robin over all four.
+
 ## Context
 
 [0013](0013-paper-reproduction-pipeline.md) left an explicit milestone-3

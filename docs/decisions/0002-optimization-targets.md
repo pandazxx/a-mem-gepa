@@ -10,8 +10,11 @@ Partially superseded (2026-09-19) by
   is the repro pipeline's four prompts (note construction + three evolution
   steps), see 0014.
 - **Still in force:** the baseline is the paper's verbatim prompts with no
-  hand-tuning pass; all prompts in a candidate are optimized jointly;
-  retrieval/QA prompts are frozen.
+  hand-tuning pass; retrieval/QA prompts are frozen.
+- **Refined (2026-11-20) by [0019](0019-sequential-single-prompt-training.md):**
+  "all prompts in a candidate are optimized jointly" no longer holds -- a
+  run optimizes one prompt with the others frozen, and the four runs are
+  chained.
 
 ## Context
 
