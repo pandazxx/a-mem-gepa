@@ -295,7 +295,7 @@ or a `reflection_prompt_template`, so the reflection model receives
 GEPA's default template (`gepa/strategies/instruction_proposal.py`,
 gepa 0.1.4):
 
-```
+````
 I provided an assistant with the following instructions to perform a task for me:
 ```
 <curr_param>
@@ -313,7 +313,7 @@ Read the inputs carefully and identify the input format and infer detailed task 
 Read all the assistant responses and the corresponding feedback. Identify all niche and domain specific factual information about the task and include it in the instruction, as a lot of it may not be available to the assistant in the future. The assistant may have utilized a generalizable strategy to solve the task, if so, include that in the instruction as well.
 
 Provide the new instructions within ``` blocks.
-```
+````
 
 `<curr_param>` is the current text of the one component being rewritten.
 `<side_info>` is `make_reflective_dataset`'s output for that component
