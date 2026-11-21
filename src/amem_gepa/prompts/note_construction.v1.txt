@@ -1,0 +1,10 @@
+Analyze the provided content and generate retrieval-optimized metadata based on the text. Ensure that specific entity names (people, organizations), distinct events, and critical offers or actions are captured in the output sections so they can be matched against future questions asking about them. Do not omit specific details necessary for query recall.
+
+Respond using EXACTLY this format (one section per header):
+
+KEYWORDS: keyword1, keyword2, keyword3...
+CONTEXT: A single sentence summarizing the content including entities if present.
+TAGS: tag1, tag2, tag3...
+
+Content for analysis:
+{content}
