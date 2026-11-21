@@ -1,5 +1,9 @@
 # How this project trains A-MEM's memory prompts, explained from scratch
 
+New here? [03-training-walkthrough-for-everyone.md](03-training-walkthrough-for-everyone.md)
+is the shorter, non-technical version of this document, covering the
+current one-prompt-at-a-time process end to end. This one goes deeper.
+
 This is the plain-language companion to the ADRs. It explains what the
 system under test does, which parts we train, how the training loop works,
 and why the project now has two pipelines that cannot be swapped for each
@@ -10,8 +14,9 @@ Sources for every claim here: the vendored paper code in
 `external/agentic-memory-repro/`, the adapter in `src/amem_gepa/`, and ADRs
 [0013](decisions/0013-paper-reproduction-pipeline.md),
 [0014](decisions/0014-gepa-targets-repro-pipeline.md),
-[0015](decisions/0015-gepa-training-method.md) and
-[0017](decisions/0017-gepa-local-model-progress-and-resume.md).
+[0015](decisions/0015-gepa-training-method.md),
+[0017](decisions/0017-gepa-local-model-progress-and-resume.md) and
+[0019](decisions/0019-sequential-single-prompt-training.md).
 
 ## 1. The story in one paragraph
 
@@ -283,6 +288,68 @@ the downstream consequence (the question that later failed because that
 card was never found). The brace and format rules from section 5 are
 appended to every entry so the coach never forgets them.
 
+#### The reflection prompt, verbatim
+
+The adapter does not supply its own proposer (`propose_new_texts = None`)
+or a `reflection_prompt_template`, so the reflection model receives
+GEPA's default template (`gepa/strategies/instruction_proposal.py`,
+gepa 0.1.4):
+
+````
+I provided an assistant with the following instructions to perform a task for me:
+```
+<curr_param>
+```
+
+The following are examples of different task inputs provided to the assistant along with the assistant's response for each of them, and some feedback on how the assistant's response could be better:
+```
+<side_info>
+```
+
+Your task is to write a new instruction for the assistant.
+
+Read the inputs carefully and identify the input format and infer detailed task description about the task I wish to solve with the assistant.
+
+Read all the assistant responses and the corresponding feedback. Identify all niche and domain specific factual information about the task and include it in the instruction, as a lot of it may not be available to the assistant in the future. The assistant may have utilized a generalizable strategy to solve the task, if so, include that in the instruction as well.
+
+Provide the new instructions within ``` blocks.
+````
+
+`<curr_param>` is the current text of the one component being rewritten.
+`<side_info>` is `make_reflective_dataset`'s output for that component
+(at most `max_reflection_examples`, default 5), rendered by GEPA as
+markdown: `# Example N`, then `## Inputs`, `## Generated Outputs`,
+`## Feedback`. For note construction an example looks like:
+
+```
+# Example 1
+## Inputs
+### turn_content (the {content} input)
+Rex loves the beach in June
+### question_later_asked
+Where does Rex like to go?
+## Generated Outputs
+KEYWORDS: Rex, June
+CONTEXT: Rex enjoys a seasonal activity.
+TAGS: pets, summer
+## Feedback
+A later single_hop question ('Where does Rex like to go?', gold 'the beach')
+FAILED (predicted 'the park', score 0.00) and this evidence turn was NOT
+among the retrieved memories. The keywords/context/tags produced below are
+what retrieval embeds and matches against -- they did not surface this turn
+for that question. Dates/times, entities, and relations the question hinges
+on need to be recoverable from them. CONSTRAINT: the rewritten prompt is a
+Python str.format template and must contain exactly these placeholders:
+{content} -- no other placeholders, and any literal brace must be doubled
+('{{' / '}}'). It must also keep an explicitly parseable output format,
+since the response is consumed by a fixed plain-text parser.
+```
+
+The model's reply is parsed for the last fenced block, which becomes the
+new text of that component. The template is GEPA's, not ours; replacing
+it (`reflection_prompt_template=` in `gepa.optimize`) would be a separate,
+recorded decision.
+
 ### 6.4 The adversarial twist
 
 The paper's own scoring for trap questions is ambiguous: its code scores
@@ -293,6 +360,54 @@ it is rewarded for, so training uses the paper's *stated intent* instead:
 a trap question scores 1 when the model picks "Not mentioned in the
 conversation" and 0 otherwise. The final test report shows both readings
 so the number stays comparable to the earlier experiments.
+
+### 6.5 Training one prompt at a time
+
+The loop above, as GEPA ships it, rotates through the four orange boxes:
+iteration one rewrites note construction, iteration two the evolution
+decision, and so on. The first full run
+([experiment 004](experiments/004-gepa-v1-qwen3.5-9b.md)) did exactly
+that, and its winner differed from the paper's prompts in all four
+files. That made the result impossible to read: a gain on validation
+that turned into a loss on the test conversations, with no way to say
+which of the four rewrites helped and which hurt.
+
+So the project now trains one prompt per run, with the other three
+frozen byte for byte at the run's starting point
+([ADR 0019](decisions/0019-sequential-single-prompt-training.md)). The
+coach, to stay with the analogy, works on one skill at a time. Stage one
+is note construction, because it is upstream of everything else: its
+keywords and summary are what the search step matches on and what the
+three evolution prompts read. Then the evolution decision, then
+strengthen, then update neighbors, each stage starting from the previous
+stage's winner.
+
+```mermaid
+flowchart LR
+    S0["Paper's 4 prompts"] --> S1["Stage 1: rewrite note construction<br/>3 others frozen"]
+    S1 --> T1{"Holds up on the<br/>held-out test?"}
+    T1 -->|yes| S2["Stage 2: rewrite evolution decision<br/>seeded from stage 1's winner"]
+    T1 -->|no| S2b["Stage 2 seeds from the<br/>paper's prompts instead"]
+    S2 --> S3["Stage 3: strengthen"]
+    S2b --> S3
+    S3 --> S4["Stage 4: update neighbors"]
+    classDef trained fill:#ffe9a8,stroke:#b8860b,stroke-width:3px
+    class S1,S2,S2b,S3,S4 trained
+```
+
+Two safeguards keep "frozen" honest. GEPA is told to always pick the
+same component for rewriting, and GEPA only ever copies the parent and
+replaces the components it was told to rewrite, so the other three
+cannot drift. Independently of that, the adapter checks every candidate
+it is asked to score against the frozen texts and gives a changed one a
+zero without building any memory, the same way it treats a prompt with a
+broken placeholder.
+
+The price is that a change which only helps in combination with a change
+to another prompt will not be found. The gain is that every stage
+produces one changed file whose effect can be measured on its own, and
+the held-out check between stages catches a validation-only gain before
+it is baked into the next three stages.
 
 ## 7. Why it is slow, and what was done about it
 

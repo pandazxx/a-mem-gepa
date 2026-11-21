@@ -57,6 +57,23 @@ gepa:
   seed_candidate_dir: src/amem_gepa/prompts/baseline_repro
 
 # Overrides applied on top of `gepa:` when run_gepa_optimize.py gets
+# --component <name> (`just gepa-optimize-component`, docs/decisions/0019):
+# one prompt optimized per run, the other three frozen byte-for-byte at the
+# seed. Stages run note_construction -> evolution_decision ->
+# evolution_strengthen -> evolution_update_neighbors, each seeded from the
+# previous stage's committed winner (--seed-file). `--smoke` overrides still
+# apply on top of these.
+gepa_single_component:
+  # Per-stage budget, same arithmetic as above: seed val (138) + 138 per
+  # accepted candidate + 2 per minibatch iteration. 800 ≈ seed + 4 accepted
+  # candidates + ~55 minibatch evals. The first 4-prompt run (experiments/
+  # 004) accepted 13 of 39 proposals in 2000 calls, i.e. ~10 iterations per
+  # prompt; a stage at 800 gives one prompt ~25-30 iterations of undivided
+  # attention, and four stages cost ~1.6x the joint run. Confirm per stage
+  # with the run plan (no --yes) before starting.
+  max_metric_calls: 800
+
+# Overrides applied on top of `gepa:` when run_gepa_optimize.py gets
 # --smoke (`just gepa-smoke`): a tiny sanity pass on truncated
 # conversations that exercises build -> cache -> QA -> reflection ->
 # acceptance -> val end to end. Sized for a local model: ~40-turn builds

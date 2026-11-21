@@ -519,3 +519,49 @@ def test_adapter_exposes_the_optional_gepa_protocol_hook_as_none(fake_repro):
     made every reflection step fail and the smoke run propose nothing."""
     adapter = fake_repro()
     assert adapter.propose_new_texts is None
+
+
+def test_frozen_component_change_scores_zero_without_building(fake_repro):
+    """docs/decisions/0019: in a single-component run the adapter refuses
+    any candidate that differs from the seed on a frozen component -- no
+    build is spent, and the reflective dataset says which component and
+    which one was allowed to change."""
+    from amem_gepa.gepa_stages import frozen_components
+
+    adapter = fake_repro(frozen_components=frozen_components(CANDIDATE, "note_construction"))
+    tampered = dict(CANDIDATE, evolution_decision=CANDIDATE["evolution_decision"] + " tampered")
+    item = _instance("Q1", "Rex")
+
+    batch = adapter.evaluate([item], tampered, capture_traces=True)
+
+    assert batch.scores == [0.0]
+    assert _FakeAgent.instances == [], "a frozen-component violation must not spend a build"
+    assert any("evolution_decision" in p and "FROZEN" in p for p in batch.trajectories[0].validation_errors)
+    dataset = adapter.make_reflective_dataset(tampered, batch, ["note_construction"])
+    feedback = dataset["note_construction"][0]["Feedback"]
+    assert "FROZEN" in feedback and "only note_construction may change" in feedback
+
+
+def test_changing_only_the_free_component_builds_normally_under_a_freeze(fake_repro):
+    from amem_gepa.gepa_stages import frozen_components
+
+    adapter = fake_repro(frozen_components=frozen_components(CANDIDATE, "note_construction"))
+    _FakeAgent.answers["Q1"] = "Rex"
+    child = dict(CANDIDATE, note_construction="REWRITTEN analyze: {content}")
+
+    batch = adapter.evaluate([_instance("Q1", "Rex")], child, capture_traces=True)
+
+    assert batch.scores == [1.0]
+    assert len(_FakeAgent.instances) == 1
+    assert adapter.builds_performed == 1
+    # The seed itself (nothing changed) is of course also allowed.
+    assert adapter.evaluate([_instance("Q1", "Rex")], dict(CANDIDATE)).scores == [1.0]
+
+
+def test_build_for_conversation_rejects_frozen_violations_loudly(fake_repro):
+    from amem_gepa.gepa_stages import frozen_components
+
+    adapter = fake_repro(frozen_components=frozen_components(CANDIDATE, "note_construction"))
+    tampered = dict(CANDIDATE, evolution_strengthen=CANDIDATE["evolution_strengthen"] + " x")
+    with pytest.raises(ValueError, match="FROZEN"):
+        adapter.build_for_conversation(tampered, "conv-a", TURNS)

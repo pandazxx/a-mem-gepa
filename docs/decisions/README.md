@@ -12,10 +12,10 @@ the `agiresearch/A-mem` library harness (`amem_adapter.py`, `evaluate.py`,
 `metrics.py`) behind `just demo` / `just baseline`, kept as a development loop
 but behind no reported result.
 
-| ADR | Title | Status (2026-11-08) |
+| ADR | Title | Status (2026-11-20) |
 |-----|-------|---------------------|
 | [0001](0001-base-repo-and-benchmark.md) | Base A-MEM repo and benchmark choice | Partially superseded by 0013/0014. LoCoMo still the benchmark; the system under test is now `WujiangXu/AgenticMemory`. |
-| [0002](0002-optimization-targets.md) | Which prompts GEPA optimizes | Partially superseded by 0014. Verbatim baseline + joint optimization stand; the candidate is 4 repro-pipeline prompts, not 2 library prompts. |
+| [0002](0002-optimization-targets.md) | Which prompts GEPA optimizes | Partially superseded by 0014 and 0019. Verbatim baseline stands; the candidate is 4 repro-pipeline prompts, not 2 library prompts, and they are now optimized one per run (0019), not jointly. |
 | [0003](0003-model-routing.md) | Model routing via LiteLLM | Partially superseded by 0013/0014. LiteLLM routes `reflection_lm` and the legacy pipeline only; the measured path uses `PAPER_REPRO_*`. |
 | [0004](0004-train-val-test-split.md) | LoCoMo train/val/test split | Accepted. Governs GEPA (0015), not `just reproduce` (full dataset). |
 | [0005](0005-reproduction-model.md) | Model for the reproduction sanity check | Superseded by 0013 + experiments 001/002. Reproduction ran on the paper's code; the verified baseline is GPT-4o-mini. |
@@ -27,8 +27,9 @@ but behind no reported result.
 | [0011](0011-demo-tracing.md) | Verbose tracing for `just demo` | Legacy pipeline only. Measured path traces via `paper_repro.py` logging (0016) and `gepa_adapter.py` trace recording. |
 | [0012](0012-evolution-decision-guard.md) | Reject fabricated evolution decisions | Legacy pipeline only. The guarded bug is specific to `agiresearch/A-mem`; not present in the repro code (0013). |
 | [0013](0013-paper-reproduction-pipeline.md) | A separate, faithful paper-reproduction pipeline | Accepted. Its open questions were closed by 0014 (prompt count) and 0015 (adversarial training direction). |
-| [0014](0014-gepa-targets-repro-pipeline.md) | GEPA optimizes the repro pipeline's four prompts | Accepted. |
+| [0014](0014-gepa-targets-repro-pipeline.md) | GEPA optimizes the repro pipeline's four prompts | Accepted; component selection refined by 0019 (one prompt per run instead of round-robin). |
 | [0015](0015-gepa-training-method.md) | GEPA training method | Accepted. |
 | [0016](0016-disable-ollama-thinking-mode.md) | Disable Ollama thinking mode for the repro pipeline | Accepted. |
 | [0017](0017-gepa-local-model-progress-and-resume.md) | GEPA on a local Ollama model: thinking-mode parity, progress/ETA, mid-build resume | Accepted. |
-| [0018](0018-held-out-test-comparison.md) | Held-out test comparison on the repro pipeline, paired bootstrap, paper metrics | Accepted. |
+| [0018](0018-held-out-test-comparison.md) | Held-out test comparison on the repro pipeline, paired bootstrap, paper metrics | Accepted. Also the gate between 0019's stages. |
+| [0019](0019-sequential-single-prompt-training.md) | Train one prompt at a time, the other three frozen; note construction first | Accepted. |

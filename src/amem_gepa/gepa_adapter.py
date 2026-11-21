@@ -22,6 +22,12 @@ on disk keyed by (candidate hash, conversation id), so re-evaluating a
 candidate -- Pareto re-checks, resumed runs, the parent side of a minibatch
 comparison -- costs zero builds.
 
+Single-component runs (docs/decisions/0019): `frozen_components` holds the
+seed's text for the three prompts a stage is NOT optimizing; any candidate
+that differs on one of them scores 0 without a build. gepa_stages.py has
+the selector that keeps GEPA from proposing such a candidate in the first
+place.
+
 Interface confirmed against the installed gepa package (gepa/core/adapter.py,
 a Protocol): evaluate() returns EvaluationBatch(outputs, scores,
 trajectories); scores are summed for minibatch acceptance and averaged over
@@ -45,6 +51,7 @@ from typing import Any
 from gepa.core.adapter import EvaluationBatch
 
 from amem_gepa.datasets.locomo import LoCoMoInstance, LoCoMoQuestionGroup
+from amem_gepa.gepa_stages import frozen_violations
 from amem_gepa.paper_repro import (
     _format_duration,
     _ollama_call_stats,
@@ -157,10 +164,17 @@ class AMemGEPAAdapter:
         max_metric_calls: int | None = None,
         stats_path: Path | None = None,
         ensure_nltk: bool = True,
+        frozen_components: Mapping[str, str] | None = None,
     ):
         if adversarial_scoring not in ("refusal", "paper"):
             raise ValueError(f"adversarial_scoring must be 'refusal' or 'paper', got {adversarial_scoring!r}")
         self.backend = backend
+        # docs/decisions/0019: in a single-component run, the other three
+        # prompts must stay byte-identical to the seed. GEPA's FixedComponent
+        # Selector already guarantees that for proposals; this is the
+        # enforcement layer -- a candidate that differs on a frozen component
+        # scores 0 without a build, like a template that fails validation.
+        self.frozen_components = dict(frozen_components) if frozen_components else {}
         self.model = model
         self.retrieve_k = retrieve_k
         self.temperature_c5 = temperature_c5
@@ -243,11 +257,12 @@ class AMemGEPAAdapter:
         candidate: dict[str, str],
         capture_traces: bool = False,
     ) -> EvaluationBatch[ItemTrajectory, Any]:
-        problems = validate_candidate(candidate)
+        problems = validate_candidate(candidate) + frozen_violations(candidate, self.frozen_components)
         if problems:
             # Never spend a build on a candidate that would crash at
-            # .format() time -- score 0 with the problems as the trace, so
-            # reflection can repair the template instead of the run dying.
+            # .format() time (or that touched a frozen component) -- score 0
+            # with the problems as the trace, so reflection can repair the
+            # template instead of the run dying.
             logger.warning("Invalid candidate (%d problems), scoring 0: %s", len(problems), problems)
             trajectories = [
                 ItemTrajectory(conversation_id=self._conv_id(item), validation_errors=problems) for item in batch
@@ -674,7 +689,7 @@ class AMemGEPAAdapter:
         behaviour as training. Returns (agent, BuildTrace|None, cache_hit,
         error|None). Raises on an invalid candidate rather than scoring 0:
         a human invoked this deliberately, so fail loudly."""
-        problems = validate_candidate(candidate)
+        problems = validate_candidate(candidate) + frozen_violations(candidate, self.frozen_components)
         if problems:
             raise ValueError(f"invalid candidate: {problems}")
         return self._build_or_load(candidate, candidate_hash(candidate), conv_id, turns)
@@ -774,7 +789,7 @@ class AMemGEPAAdapter:
                     {
                         "Inputs": {"current_prompt_template": candidate.get(component, "")},
                         "Generated Outputs": "(not executed -- template invalid)",
-                        "Feedback": "The prompt template is invalid and scored 0 without running: "
+                        "Feedback": "The candidate is invalid and scored 0 without running: "
                         + "; ".join(validation_errors)
                         + ". "
                         + self._placeholder_constraint(component),
