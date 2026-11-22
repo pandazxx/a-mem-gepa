@@ -109,11 +109,53 @@ from `results/gepa_note_construction_20261120_042519/run_log.txt` /
 
 ## Before/after prompt diff
 
-**TODO.** `best_candidate/note_construction.txt` to be committed as
-`src/amem_gepa/prompts/note_construction.v1.txt` (the other three files in
-`best_candidate/` are identical to `baseline_repro/` and are not
-re-committed). Diff against `baseline_repro/note_construction.txt` goes
-here whether or not the candidate is adopted — the history is the point.
+Committed as `src/amem_gepa/prompts/note_construction.v1.txt` (commit
+`cc90184`); the other three files in `best_candidate/` are byte-identical
+to `baseline_repro/` and are not re-committed. Diff against
+`baseline_repro/note_construction.txt`:
+
+```diff
+-Analyze the following content and provide:
+-1. KEYWORDS: The most important keywords (nouns, verbs, key concepts). Order from most to least important. At least three keywords. Do not include speaker names or time references.
+-2. CONTEXT: One sentence summarizing the main topic, key points, and purpose.
+-3. TAGS: Broad categories/themes for classification (domain, format, type). At least three tags.
++Analyze the provided content and generate retrieval-optimized metadata based on the text. Ensure that specific entity names (people, organizations), distinct events, and critical offers or actions are captured in the output sections so they can be matched against future questions asking about them. Do not omit specific details necessary for query recall.
+
+ Respond using EXACTLY this format (one section per header):
+
+-KEYWORDS: keyword1, keyword2, keyword3, ...
+-CONTEXT: A single sentence summarizing the content.
+-TAGS: tag1, tag2, tag3, ...
++KEYWORDS: keyword1, keyword2, keyword3...
++CONTEXT: A single sentence summarizing the content including entities if present.
++TAGS: tag1, tag2, tag3...
+
+ Content for analysis:
+ {content}
+```
+
+What the coach changed, in substance:
+
+- **The purpose is now stated**: metadata is for being "matched against
+  future questions". The paper's prompt never said what the keywords were
+  *for*.
+- **The "do not include speaker names or time references" rule is gone**,
+  replaced by an instruction to capture entity names, distinct events and
+  "critical offers or actions". For a retrieval index this is the
+  interesting reversal: the paper's rule removed exactly the tokens a
+  single-hop question tends to contain. It is the most plausible source of
+  the +6.3 single-hop. Temporal barely moved (+0.8) even though time
+  references are now allowed, so dates alone were not the bottleneck.
+- **Dropped**: the keyword ordering rule, the "at least three" minimums,
+  and the per-section definitions (domain/format/type for tags). Nothing
+  in the test table suggests those mattered.
+- **Kept**: the exact three-header output format and the single `{content}`
+  placeholder (the hard constraints), so the frozen parser reads it
+  unchanged; `validate_candidate` passes.
+
+Unchanged-and-still-true: the raw turn is stored verbatim regardless of
+this prompt, so the change affects what retrieval can *find*, not what the
+memory *contains* (ADR 0015).
 
 ## Cost
 
