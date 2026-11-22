@@ -32,3 +32,4 @@ but behind no reported result.
 | [0016](0016-disable-ollama-thinking-mode.md) | Disable Ollama thinking mode for the repro pipeline | Accepted. |
 | [0017](0017-gepa-local-model-progress-and-resume.md) | GEPA on a local Ollama model: thinking-mode parity, progress/ETA, mid-build resume | Accepted. |
 | [0018](0018-held-out-test-comparison.md) | Held-out test comparison on the repro pipeline, paired bootstrap, paper metrics | Accepted. |
+| [0020](0020-proxy-evaluation-for-note-construction.md) | Train note construction without full rebuilds: re-note question-relevant notes on a seed-built memory | **Proposed.** Needs the calibration experiment it describes. |
