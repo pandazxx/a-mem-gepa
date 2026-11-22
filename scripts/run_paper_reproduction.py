@@ -63,6 +63,7 @@ def main(
         retrieve_k=k,
         ratio=r,
         temperature_c5=repro_cfg["temperature_c5"],
+        think=bool(repro_cfg.get("thinking", False)),
     )
 
     out_path = Path(output)

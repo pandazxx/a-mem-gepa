@@ -91,6 +91,7 @@ def main(
         load_seed_candidate,
         parse_seed_override,
     )
+    from amem_gepa.reflection_lm import ReflectionSettings, build_reflection_lm, reflection_stats
     from amem_gepa.repro_injection import (
         COMPONENTS,
         candidate_hash,
@@ -115,6 +116,10 @@ def main(
     backend = cfg["models"]["paper_repro_backend"]
     model = cfg["models"]["paper_repro_model"]
     reflection_lm = cfg["models"]["gepa_reflection_lm"]
+    reflection = ReflectionSettings.from_config(reflection_lm, gepa_cfg.get("reflection"))
+    # One knob for the task model's Ollama thinking mode, shared with `just
+    # reproduce` and `just gepa-test-eval` (docs/decisions/0020).
+    task_think = bool(cfg.get("paper_repro", {}).get("thinking", False))
 
     seed_dir = Path(seed_candidate_dir or gepa_cfg["seed_candidate_dir"])
     try:
@@ -186,9 +191,14 @@ def main(
 
     typer.echo(f"GEPA run plan{' (SMOKE -- plumbing check, numbers are meaningless)' if smoke else ''}")
     typer.echo(f"  task backend/model:   {backend} / {model}")
+    if backend == "ollama":
+        typer.echo(
+            f"  task thinking:        {'ON' if task_think else 'off'} (paper_repro.thinking, "
+            f"docs/decisions/0016/0020{'; separate build cache' if task_think else ''})"
+        )
     if smoke:
         typer.echo(f"  smoke truncation:     first {gepa_cfg.get('max_turns', 40)} turns per conversation")
-    typer.echo(f"  reflection_lm:        {reflection_lm}")
+    typer.echo(f"  reflection (coach):   {reflection.describe()}")
     if component:
         typer.echo(f"  optimizing:           {component} ONLY (docs/decisions/0019)")
         typer.echo(f"  frozen at the seed:   {', '.join(frozen)}")
@@ -293,7 +303,9 @@ def main(
         max_metric_calls=gepa_cfg["max_metric_calls"],
         stats_path=run_dir / "adapter_stats.json",
         frozen_components=frozen,
+        task_think=task_think,
     )
+    coach = build_reflection_lm(reflection)
 
     # Provenance for chaining stages and for the experiment doc's prompt
     # diff: the exact seed this run started from, next to its winner.
@@ -307,9 +319,12 @@ def main(
         trainset=trainset,
         valset=valset,
         adapter=adapter,
-        reflection_lm=reflection_lm,
+        reflection_lm=coach,
         reflection_minibatch_size=minibatch,
         max_metric_calls=gepa_cfg["max_metric_calls"],
+        # Coach spend cap (docs/decisions/0020); None = no cap. Ollama
+        # reports $0 so the cap is inert there.
+        max_reflection_cost=reflection.max_cost_usd,
         # One component per stage (docs/decisions/0019) or GEPA's default
         # round-robin over all four.
         module_selector=FixedComponentSelector(component) if component else "round_robin",
@@ -347,7 +362,10 @@ def main(
         "config": config,
         "backend": backend,
         "model": model,
+        "task_thinking": task_think,
         "reflection_lm": reflection_lm,
+        "reflection": reflection.to_dict(),
+        **reflection_stats(coach),
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     typer.echo(json.dumps(summary, indent=2))

@@ -56,6 +56,7 @@ def main(
     backend = cfg["models"]["paper_repro_backend"]
     model = cfg["models"]["paper_repro_model"]
     k = retrieve_k if retrieve_k is not None else gepa_cfg.get("retrieve_k", 10)
+    task_think = bool(cfg.get("paper_repro", {}).get("thinking", False))
     resamples = cfg.get("evaluation", {}).get("bootstrap_resamples", 10_000)
 
     baseline_source = baseline_dir or gepa_cfg["seed_candidate_dir"]
@@ -90,6 +91,8 @@ def main(
     if baseline_dir:
         typer.echo("                   NOTE: baseline arm is NOT the paper's prompts -- the delta is stage-over-stage")
     typer.echo(f"  retrieve_k:      {k} (same for both arms)")
+    if backend == "ollama":
+        typer.echo(f"  task thinking:   {'ON' if task_think else 'off'} (paper_repro.thinking, same for both arms)")
     typer.echo(f"  cost:            up to {arms * len(convs)} memory builds (fewer if cached) + {arms * len(instances)} questions")
     typer.echo(f"  bootstrap:       {resamples} paired resamples")
     typer.echo(f"  run dir:         {run_dir}{'  (RESUMING -- progress logs found)' if resuming else ''}")
@@ -122,6 +125,7 @@ def main(
         checkpoint_every_turns=gepa_cfg.get("build_checkpoint_every_turns", 20),
         log_every=gepa_cfg.get("progress_log_every", 10),
         stats_path=run_dir / "adapter_stats.json",
+        task_think=task_think,
     )
     report = run_test_eval(
         adapter,
@@ -131,6 +135,7 @@ def main(
         run_dir,
         bootstrap_resamples=resamples,
         meta={"config": config, "backend": backend, "model": model, "retrieve_k": k, "split": split,
+              "task_thinking": task_think,
               "candidate_dir": candidate, "baseline_dir": baseline_source},
     )
     typer.echo("\n" + (run_dir / "summary.md").read_text())

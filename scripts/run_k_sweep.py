@@ -132,6 +132,7 @@ def main(
         ratio=r,
         temperature_c5=repro_cfg["temperature_c5"],
         results_dir=RESULTS_DIR,
+        think=bool(repro_cfg.get("thinking", False)),
     )
 
     print()
