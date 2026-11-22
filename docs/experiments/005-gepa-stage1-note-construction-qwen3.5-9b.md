@@ -1,7 +1,7 @@
 # 005: Stage 1 of sequential training — note construction only, qwen3.5:9b
 
 - Date: training 2026-11-20 → 2026-11-21 (26.3 h wall-clock); held-out
-  comparison **pending**
+  comparison 2026-11-21 → 2026-11-22
 - Config: `configs/base.yaml` with the `gepa_single_component` overrides
   (branch `topic/single-prompt-training-5ed55fc`, PR #11; code at commit
   `70b0f8f`, docs-only commits followed)
@@ -46,17 +46,58 @@ own that says nothing about the test split — 004's gain was the same size
 and reversed there — but it does say the other three rewrites in 004 were
 not where the validation gain came from.
 
-**Held-out test comparison: TODO.** Run
+**Held-out test comparison** (`just gepa-test-eval
+results/gepa_note_construction_20261120_042519/best_candidate --yes`; test
+set conv-26, conv-44, conv-48; n=596 questions; paired bootstrap over
+questions, 10,000 resamples; `retrieve_k=10` both arms; paper metric
+suite; `results/test_eval_gepa_note_construction_20261120_042519_test/summary.md`):
 
-```
-just gepa-test-eval results/gepa_note_construction_20261120_042519/best_candidate --yes
-```
+| category | n | baseline F1 | candidate F1 | delta F1 [95% CI] | baseline BLEU-1 | candidate BLEU-1 |
+|---|---|---|---|---|---|---|
+| multi_hop | 83 | 0.2519 | 0.2710 | +0.0192 [-0.0393, +0.0784] | 0.1817 | 0.2159 |
+| temporal | 103 | 0.3553 | 0.3633 | +0.0081 [-0.0469, +0.0652] | 0.2660 | 0.2717 |
+| open_domain | 30 | 0.1105 | 0.1033 | -0.0072 [-0.0927, +0.0685] | 0.1098 | 0.0896 |
+| single_hop | 250 | 0.4008 | **0.4635** | **+0.0627 [+0.0171, +0.1089]** | 0.3492 | 0.4116 |
+| adversarial | 130 | 0.3635 | 0.3132 | -0.0503 [-0.1413, +0.0371] | 0.3489 | 0.2996 |
+| overall | 596 | 0.3494 | 0.3685 | +0.0190 [-0.0129, +0.0504] | 0.2994 | 0.3195 |
 
-and paste `summary.md` here. The baseline arm's three test builds should
-come from the cache (004's test eval built them under the same candidate
-hash), so the cost is ~3 fresh builds + 1,192 questions. Per ADR 0019 the
-verdict (carry forward to stage 2 or not) is decided from that table, not
-from the validation number above.
+Adversarial, refusal reading (picked "Not mentioned in the conversation"):
+baseline 0.6846, candidate 0.7154, delta +0.0308 [-0.0615, +0.1231].
+
+Reading it:
+
+- **Single-hop improved and the interval excludes zero** (+6.3 points,
+  n=250, the largest category). This is the first held-out effect in the
+  project whose interval does not straddle zero. It is also the category
+  one would predict for a better note-construction prompt: a single fact
+  on a single card, found or not found.
+- **Overall +1.9 points, interval [-1.3, +5.0]** — straddles zero, so
+  proposal criterion 1 (aggregate CI clear of baseline) is **not met**.
+  Point estimate is 3.4x 004's (+0.56), and the lower bound is much closer
+  to zero.
+- **Adversarial moved in the right direction this time, both readings
+  agree, neither is significant.** The candidate matches the trap text
+  less (F1 row -5.0) and refuses more (refusal row +3.1). In 004 both
+  readings pointed the wrong way. Note that the paper's F1 reading going
+  *down* is the good outcome here (ADR 0013/0015's sign ambiguity).
+- **No category regresses beyond noise.** open_domain -0.7 on n=30 is
+  well inside its interval; adversarial F1 is the wanted direction.
+- **Under the training objective** (refusal rate in place of adversarial
+  F1, weighted by n): baseline **0.419**, candidate **0.456**, **+3.7
+  points on test**, against +5.8 on validation. 004 was +5.6 on
+  validation and -2.3 on test. So about two-thirds of the validation gain
+  transferred, where 004's reversed.
+- **Noise floor caveat.** The baseline arm's memory was identical in 004
+  and here (cache hit on the same candidate hash), yet its re-answered
+  scores differ: overall 0.3623 → 0.3494, multi_hop 0.2881 → 0.2519,
+  temporal 0.3788 → 0.3553, single_hop 0.4090 → 0.4008 (adversarial
+  refusal identical, 0.6846). Re-answering the same memory moves overall
+  F1 by ~1.3 points and multi-hop by ~3.6, i.e. the QA/retrieval sampling
+  noise is of the same order as the overall delta measured here. The
+  paired bootstrap accounts for per-question variance *within* this run,
+  but this cross-run drift is the right mental yardstick for the
+  non-significant rows. A baseline-vs-baseline re-answer (zero builds,
+  ~1.5 h of QA) would quantify it properly; not done.
 
 ## Pareto front summary
 
@@ -89,6 +130,12 @@ Local Ollama only (`qwen3.5:9b`), $0 API spend. From `summary.json`
 | LLM calls | 61,915 (≈1,700 per build after subtracting ~2 per question; 004: ~1,900) |
 | metric calls | 884 / 800 budget; 34 evaluations (6 full-val + 28 minibatch) |
 
+Test comparison: 3 fresh builds (candidate arm; the baseline arm's 3 test
+builds were cache hits from 004's test eval) + 1,192 answered questions.
+**TODO:** wall-clock from
+`results/test_eval_gepa_note_construction_20261120_042519_test/test_eval.json`
+→ `adapter_stats` (estimate at this run's rates: ~2 h builds + ~1.5 h QA).
+
 Notable and unexplained: **42 min/build vs. 89 min/build in 004**, same
 model, same hardware as far as known. Candidates for the difference, to be
 checked against the per-build progress lines in `amem_gepa.log`: shorter
@@ -99,24 +146,50 @@ normal.
 
 ## Conclusion
 
-Against `docs/00-proposal.md`'s criteria: **not yet assessable** — the
-held-out comparison has not run. What this stage establishes so far:
+Against `docs/00-proposal.md`'s criteria, for this stage alone:
 
-- The single-component machinery works end to end on the real model:
-  frozen components verified intact, only `note_construction` changed, 5
-  accepted rewrites in 26 hours.
-- A note-construction-only rewrite matches 004's full validation gain
-  (+5.8 vs +5.6), which is consistent with note construction being the
-  prompt that matters most for retrievability (ADR 0019's reason for
-  putting it first) — or with both runs fitting the same two validation
-  conversations the same way. The test table decides which.
+1. *Statistically meaningful aggregate improvement* — **no.** +1.9
+   overall, CI [-1.3, +5.0].
+2. *No category regresses beyond noise* — **yes**, as far as 596 questions
+   can tell. The one significant movement (single-hop, +6.3) is an
+   improvement; adversarial moved in the wanted direction on both readings.
+3. *Cost reported next to the delta* — yes: 26.3 h training + the test
+   eval (cost TODO below) for +1.9 overall / +6.3 single-hop.
+
+What this stage establishes:
+
+- A note-construction-only rewrite reproduced 004's whole validation gain
+  (+5.8 vs +5.6) **and, unlike 004, most of it transferred to the held-out
+  split** (+3.7 under the training objective, vs 004's -2.3). The three
+  evolution rewrites in 004 were therefore not where its validation gain
+  came from, and they are the most plausible source of its test reversal
+  (adversarial went the wrong way there and the right way here).
+- Single-hop retrievability is where a better note prompt helps, which is
+  what ADR 0019 predicted when putting this component first.
+
+**Stage verdict (ADR 0019 gate): recommended *keep* — the user's call.**
+The strict reading of the gate ("overall range above zero") is not met.
+The case for carrying the winner into stage 2 anyway: one category is
+significantly better, none is significantly worse, both adversarial
+readings agree on the direction, and the training objective's test delta
+is positive. The case against: the overall interval includes zero, and
+the cross-run noise floor above is about as large as the overall delta.
+Discarding would mean stage 2 searches on top of a note prompt we have
+evidence is worse on single-hop. **Decision recorded here once made:**
+TODO.
 
 Next steps, in order:
 
-1. `just gepa-test-eval` on the winner (above); paste the table; decide
-   keep/discard per ADR 0019.
-2. Commit `note_construction.v1.txt` and fill the diff section.
+1. Record the keep/discard decision above.
+2. Commit `best_candidate/note_construction.txt` as
+   `src/amem_gepa/prompts/note_construction.v1.txt`; fill the diff
+   section. Fill the test-eval cost line from
+   `results/test_eval_gepa_note_construction_20261120_042519_test/test_eval.json`
+   → `adapter_stats`.
 3. Fill the Pareto table from `run_log.txt`.
-4. Stage 2 (`evolution_decision`), seeded from v1 if kept, from
-   `baseline_repro` otherwise:
+4. Stage 2 (`evolution_decision`):
    `just gepa-optimize-component evolution_decision --seed-file note_construction=src/amem_gepa/prompts/note_construction.v1.txt --yes`
+   (drop `--seed-file` if the verdict is discard).
+5. Optional, zero builds: a baseline-vs-baseline re-answer of the test
+   set to put a number on the QA noise floor, so later stages' overall
+   deltas can be read against it.
