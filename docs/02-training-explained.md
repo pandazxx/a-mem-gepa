@@ -351,7 +351,7 @@ it (`reflection_prompt_template=` in `gepa.optimize`) would be a separate,
 recorded decision.
 
 Which model plays the coach, and whether it thinks before answering, is
-configuration ([ADR 0020](decisions/0020-thinking-mode-config-and-claude-coach.md)):
+configuration ([ADR 0021](decisions/0021-thinking-mode-config-and-claude-coach.md)):
 `GEPA_REFLECTION_LM` names it (`ollama/qwen3.5:9b` for the local model
 experiments 004/005 used, `anthropic/claude-opus-5-5` for Claude through
 the official SDK), and `gepa.reflection` in the config sets thinking, effort,

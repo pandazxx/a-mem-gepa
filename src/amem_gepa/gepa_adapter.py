@@ -178,7 +178,7 @@ class AMemGEPAAdapter:
         self.frozen_components = dict(frozen_components) if frozen_components else {}
         # Ollama thinking mode for the TASK model (memory building + QA),
         # docs/decisions/0016 default False, configurable via
-        # `paper_repro.thinking` (docs/decisions/0020). Part of the build
+        # `paper_repro.thinking` (docs/decisions/0021). Part of the build
         # cache key: the same prompts build a different memory with thinking
         # on, so the two must never share a cache entry.
         self.task_think = bool(task_think)

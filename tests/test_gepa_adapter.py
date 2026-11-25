@@ -568,7 +568,7 @@ def test_build_for_conversation_rejects_frozen_violations_loudly(fake_repro):
 
 
 def test_task_thinking_is_forwarded_to_ollama_and_keys_a_separate_cache(fake_repro, monkeypatch, tmp_path):
-    """docs/decisions/0020: `paper_repro.thinking` reaches ollama.chat as
+    """docs/decisions/0021: `paper_repro.thinking` reaches ollama.chat as
     think=True, and builds made with thinking on never share a cache entry
     with thinking-off builds of the same candidate."""
     seen = []

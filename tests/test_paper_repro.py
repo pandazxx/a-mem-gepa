@@ -829,7 +829,7 @@ def test_patch_ollama_chat_forces_think_false_by_default(monkeypatch):
 
 
 def test_patch_ollama_chat_think_default_is_configurable_after_install(monkeypatch):
-    """docs/decisions/0020: the patch is installed once, but the `think`
+    """docs/decisions/0021: the patch is installed once, but the `think`
     default it injects follows the most recent _patch_ollama_chat(think=...)
     call, so `paper_repro.thinking: true` works even if an earlier caller in
     the same process installed the patch with the default."""

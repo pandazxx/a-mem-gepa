@@ -1,4 +1,4 @@
-# 0020: Configurable thinking mode, and Claude as the coach through the official SDK
+# 0021: Configurable thinking mode, and Claude as the coach through the official SDK
 
 ## Status
 

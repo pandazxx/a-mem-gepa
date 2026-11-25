@@ -1,6 +1,6 @@
-"""The reflection ("coach") model behind GEPA's proposals (docs/decisions/0020).
+"""The reflection ("coach") model behind GEPA's proposals (docs/decisions/0021).
 
-GEPA accepts any callable `(prompt) -> str` as `reflection_lm`. Until 0020
+GEPA accepts any callable `(prompt) -> str` as `reflection_lm`. Until 0021
 this project passed the raw `GEPA_REFLECTION_LM` string and let gepa route
 it through LiteLLM, which gave no control over thinking mode (an Ollama
 reasoning model such as qwen3.5:9b then thinks by default, which is what

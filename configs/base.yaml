@@ -55,7 +55,7 @@ gepa:
   # The paper's verbatim prompts (docs/decisions/0014) -- 4 components
   # matching the repro pipeline, generated from llm_text_parsers' constants.
   seed_candidate_dir: src/amem_gepa/prompts/baseline_repro
-  # The coach (reflection model, docs/decisions/0020). Which model comes
+  # The coach (reflection model, docs/decisions/0021). Which model comes
   # from GEPA_REFLECTION_LM (models.gepa_reflection_lm above):
   #   ollama/<model>     native ollama client; `thinking` is the think flag
   #   anthropic/<model>  official anthropic SDK; thinking is always on,
@@ -133,5 +133,5 @@ paper_repro:
   # false = docs/decisions/0016 (every reported run so far). Turning it on
   # costs ~100x the tokens per call on qwen3.5:9b and keys a separate
   # build cache (<hash>-think/), so no cached build is reused across the
-  # two settings (docs/decisions/0020).
+  # two settings (docs/decisions/0021).
   thinking: false

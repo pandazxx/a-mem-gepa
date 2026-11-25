@@ -2,7 +2,7 @@
 
 ## Status
 
-Refined (2026-11-22) by [0020](0020-thinking-mode-config-and-claude-coach.md):
+Refined (2026-11-22) by [0021](0021-thinking-mode-config-and-claude-coach.md):
 `think=False` is now the default of `paper_repro.thinking` rather than a
 constant, and a separate build cache keys thinking-on builds.
 

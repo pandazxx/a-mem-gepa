@@ -1,4 +1,4 @@
-"""Tests for the coach (reflection model) backends, docs/decisions/0020:
+"""Tests for the coach (reflection model) backends, docs/decisions/0021:
 settings from config, native-Ollama think flag, the Claude request shape
 (adaptive thinking + effort, no temperature, no budget_tokens), cost
 accounting, refusal handling, and provider dispatch."""

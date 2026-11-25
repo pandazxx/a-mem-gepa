@@ -28,7 +28,7 @@ dependencies = [
   # backend=ollama, so needs to be listed explicitly.
   "openai>=1.0.0",
   # Coach (reflection model) on Claude through the official SDK
-  # (docs/decisions/0020). Only imported when GEPA_REFLECTION_LM=anthropic/...
+  # (docs/decisions/0021). Only imported when GEPA_REFLECTION_LM=anthropic/...
   "anthropic>=2.12.0",
 ]
 

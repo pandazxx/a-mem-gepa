@@ -118,7 +118,7 @@ def main(
     reflection_lm = cfg["models"]["gepa_reflection_lm"]
     reflection = ReflectionSettings.from_config(reflection_lm, gepa_cfg.get("reflection"))
     # One knob for the task model's Ollama thinking mode, shared with `just
-    # reproduce` and `just gepa-test-eval` (docs/decisions/0020).
+    # reproduce` and `just gepa-test-eval` (docs/decisions/0021).
     task_think = bool(cfg.get("paper_repro", {}).get("thinking", False))
 
     seed_dir = Path(seed_candidate_dir or gepa_cfg["seed_candidate_dir"])
@@ -194,7 +194,7 @@ def main(
     if backend == "ollama":
         typer.echo(
             f"  task thinking:        {'ON' if task_think else 'off'} (paper_repro.thinking, "
-            f"docs/decisions/0016/0020{'; separate build cache' if task_think else ''})"
+            f"docs/decisions/0016/0021{'; separate build cache' if task_think else ''})"
         )
     if smoke:
         typer.echo(f"  smoke truncation:     first {gepa_cfg.get('max_turns', 40)} turns per conversation")
@@ -322,7 +322,7 @@ def main(
         reflection_lm=coach,
         reflection_minibatch_size=minibatch,
         max_metric_calls=gepa_cfg["max_metric_calls"],
-        # Coach spend cap (docs/decisions/0020); None = no cap. Ollama
+        # Coach spend cap (docs/decisions/0021); None = no cap. Ollama
         # reports $0 so the cap is inert there.
         max_reflection_cost=reflection.max_cost_usd,
         # One component per stage (docs/decisions/0019) or GEPA's default

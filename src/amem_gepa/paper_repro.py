@@ -273,7 +273,7 @@ class _ProgressTracker:
 _ollama_call_stats: list[dict] = []
 
 # What the instrumented ollama.chat injects as `think` when the caller did
-# not pass one. False = docs/decisions/0016's default; docs/decisions/0020
+# not pass one. False = docs/decisions/0016's default; docs/decisions/0021
 # makes it configurable (`paper_repro.thinking`). Module-level rather than
 # baked into the closure so a later _patch_ollama_chat(think=...) call can
 # flip it even though the patch itself is installed only once.
@@ -288,7 +288,7 @@ def _patch_ollama_chat(think: bool = False) -> None:
     """Idempotent -- safe to call on every run_full_reproduction call
     (e.g. once per k-sweep value). The instrumentation is installed once;
     the `think` default it injects is updated on every call, so the last
-    caller's setting wins (docs/decisions/0020)."""
+    caller's setting wins (docs/decisions/0021)."""
     global _ollama_think_default
     import ollama
 
@@ -405,7 +405,7 @@ def run_full_reproduction(
     ensure_repro_repo_importable()
     ensure_nltk_data()
     if backend == "ollama":
-        # `think` is docs/decisions/0016's switch, configurable since 0020
+        # `think` is docs/decisions/0016's switch, configurable since 0021
         # (`paper_repro.thinking`); False matches every reported run so far.
         _patch_ollama_chat(think=think)
 
