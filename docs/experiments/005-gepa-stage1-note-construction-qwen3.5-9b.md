@@ -217,12 +217,13 @@ readings agree on the direction, and the training objective's test delta
 is positive. The case against: the overall interval includes zero, and
 the cross-run noise floor above is about as large as the overall delta.
 Discarding would mean stage 2 searches on top of a note prompt we have
-evidence is worse on single-hop. **Decision recorded here once made:**
-TODO.
+evidence is worse on single-hop. **Decision (2026-11-24): kept.** Stage 2
+([006](006-gepa-stage2-evolution-decision-qwen3.5-9b.md)) was seeded from
+`note_construction.v1.txt`.
 
 Next steps, in order:
 
-1. Record the keep/discard decision above.
+1. ~~Record the keep/discard decision above.~~ Done: kept.
 2. Commit `best_candidate/note_construction.txt` as
    `src/amem_gepa/prompts/note_construction.v1.txt`; fill the diff
    section. Fill the test-eval cost line from

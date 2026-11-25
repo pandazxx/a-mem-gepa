@@ -31,6 +31,13 @@ def main(
         help="Directory holding the 4 candidate prompt files (e.g. results/<run>/best_candidate). "
         "Omit to score the baseline arm only.",
     ),
+    baseline_dir: str = typer.Option(
+        None,
+        "--baseline-dir",
+        help="Directory holding the 4 prompt files of the BASELINE arm; default: gepa.seed_candidate_dir "
+        "(the paper's prompts). For a stage gate under docs/decisions/0019, point this at the previous "
+        "stage's winner (e.g. results/<stage1>/best_candidate) so the delta is stage-over-stage.",
+    ),
     split: str = typer.Option("test", "--split", help="Which split's conversations to evaluate (default: test)."),
     run_label: str = typer.Option(None, "--run-label", help="Results dir name; default: test_eval_<candidate dir name>. Reuse to resume."),
     retrieve_k: int = typer.Option(None, "--retrieve-k", help="Top-k at answer time for BOTH arms; default: gepa.retrieve_k from the config (what training used)."),
@@ -51,7 +58,12 @@ def main(
     k = retrieve_k if retrieve_k is not None else gepa_cfg.get("retrieve_k", 10)
     resamples = cfg.get("evaluation", {}).get("bootstrap_resamples", 10_000)
 
-    baseline = load_baseline_candidate(Path(gepa_cfg["seed_candidate_dir"]))
+    baseline_source = baseline_dir or gepa_cfg["seed_candidate_dir"]
+    baseline = load_baseline_candidate(Path(baseline_source))
+    problems = validate_candidate(baseline)
+    if problems:
+        typer.echo(f"Baseline invalid: {problems}")
+        raise typer.Exit(code=1)
     cand = None
     if candidate:
         cand = load_baseline_candidate(Path(candidate))
@@ -65,7 +77,8 @@ def main(
 
     instances = load_split(split)
     convs = sorted({i.conversation_id for i in instances})
-    label = run_label or f"test_eval_{Path(candidate).parent.name + '_' if candidate else ''}{split}"
+    vs = f"vs_{Path(baseline_dir).parent.name}_" if baseline_dir else ""
+    label = run_label or f"test_eval_{Path(candidate).parent.name + '_' if candidate else ''}{vs}{split}"
     run_dir = Path("results") / label
     arms = 2 if cand is not None else 1
     resuming = any(run_dir.glob("qa_progress_*.jsonl"))
@@ -73,7 +86,9 @@ def main(
     typer.echo("Held-out comparison plan (docs/decisions/0018)")
     typer.echo(f"  backend/model:   {backend} / {model}")
     typer.echo(f"  split:           {split} -> {len(convs)} conversations {convs}, {len(instances)} questions")
-    typer.echo(f"  arms:            baseline ({gepa_cfg['seed_candidate_dir']})" + (f" vs candidate ({candidate})" if cand else " only"))
+    typer.echo(f"  arms:            baseline ({baseline_source})" + (f" vs candidate ({candidate})" if cand else " only"))
+    if baseline_dir:
+        typer.echo("                   NOTE: baseline arm is NOT the paper's prompts -- the delta is stage-over-stage")
     typer.echo(f"  retrieve_k:      {k} (same for both arms)")
     typer.echo(f"  cost:            up to {arms * len(convs)} memory builds (fewer if cached) + {arms * len(instances)} questions")
     typer.echo(f"  bootstrap:       {resamples} paired resamples")
@@ -116,7 +131,7 @@ def main(
         run_dir,
         bootstrap_resamples=resamples,
         meta={"config": config, "backend": backend, "model": model, "retrieve_k": k, "split": split,
-              "candidate_dir": candidate, "baseline_dir": gepa_cfg["seed_candidate_dir"]},
+              "candidate_dir": candidate, "baseline_dir": baseline_source},
     )
     typer.echo("\n" + (run_dir / "summary.md").read_text())
     typer.echo(json.dumps(report["adapter_stats"], indent=2))

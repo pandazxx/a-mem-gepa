@@ -77,7 +77,9 @@ eval candidate config="configs/base.yaml":
 #   just gepa-test-eval results/gepa-qwen35-9b-v1/best_candidate --yes
 # Config is fixed to configs/base.yaml here (unlike the other recipes) so that
 # flags can follow the candidate directly; pass `--config other.yaml` in the
-# flags to override (the last --config wins).
+# flags to override (the last --config wins). For a stage gate (docs/decisions/
+# 0019) compare against the PREVIOUS stage's winner instead of the paper:
+#   just gepa-test-eval results/<stage2>/best_candidate --baseline-dir results/<stage1>/best_candidate --yes
 gepa-test-eval candidate *args="":
     uv run python scripts/run_gepa_test_eval.py --config configs/base.yaml --candidate {{candidate}} {{args}}
 
