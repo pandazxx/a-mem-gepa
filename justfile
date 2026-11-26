@@ -50,6 +50,11 @@ gepa-optimize config="configs/base.yaml" *args="":
 #   just gepa-optimize-component note_construction --yes
 #   just gepa-optimize-component evolution_decision \
 #       --seed-file note_construction=src/amem_gepa/prompts/note_construction.v1.txt --yes
+# For the note_construction stage, `--proxy evidence|competitors` scores
+# candidates on the seed-built memory with only the question-relevant notes
+# re-constructed (docs/decisions/0020; ~4-20 min per rollout instead of ~90):
+#   just gepa-optimize-component note_construction --proxy competitors --yes
+#   just gepa-test-eval results/<run>/best_candidate --split val --yes   # full-build re-score
 # Config is fixed to configs/base.yaml so flags can follow the component;
 # pass `--config other.yaml` in the flags to override (the last --config wins).
 gepa-optimize-component component *args="":

@@ -33,3 +33,4 @@ but behind no reported result.
 | [0017](0017-gepa-local-model-progress-and-resume.md) | GEPA on a local Ollama model: thinking-mode parity, progress/ETA, mid-build resume | Accepted. |
 | [0018](0018-held-out-test-comparison.md) | Held-out test comparison on the repro pipeline, paired bootstrap, paper metrics | Accepted. Also the gate between 0019's stages. |
 | [0019](0019-sequential-single-prompt-training.md) | Train one prompt at a time, the other three frozen; note construction first | Accepted. |
+| [0020](0020-proxy-evaluation-for-note-construction.md) | Train note construction without full rebuilds: re-note question-relevant notes on a seed-built memory | **Proposed, implemented behind `--proxy`.** Acceptance pending the calibration run it describes. |

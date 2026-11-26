@@ -72,6 +72,15 @@ def main(
     max_metric_calls: int = typer.Option(
         None, "--max-metric-calls", help="Override the config's metric-call budget for this run."
     ),
+    proxy: str = typer.Option(
+        None,
+        "--proxy",
+        help="note_construction stages only (docs/decisions/0020): 'evidence' or 'competitors' scores "
+        "candidates on the SEED-built memory with only the question-relevant notes re-constructed, "
+        "instead of a full build per candidate (~4-20 min vs ~90 min per rollout). A training-time "
+        "surrogate: re-score the winner with a full build (`just gepa-test-eval <best> --split val`) "
+        "before committing it. Default: gepa_single_component.proxy_mode (none).",
+    ),
 ):
     load_dotenv()
 
@@ -112,6 +121,14 @@ def main(
         gepa_cfg.update(cfg.get("gepa_smoke", {}))
     if max_metric_calls is not None:
         gepa_cfg["max_metric_calls"] = max_metric_calls
+    proxy_mode = proxy or gepa_cfg.get("proxy_mode", "none") or "none"
+    if proxy_mode != "none":
+        if proxy_mode not in ("evidence", "competitors"):
+            typer.echo(f"ERROR: --proxy must be 'evidence' or 'competitors', got {proxy_mode!r}")
+            raise typer.Exit(code=1)
+        if component != "note_construction":
+            typer.echo("ERROR: --proxy is only valid with --component note_construction (docs/decisions/0020)")
+            raise typer.Exit(code=1)
     backend = cfg["models"]["paper_repro_backend"]
     model = cfg["models"]["paper_repro_model"]
     reflection_lm = cfg["models"]["gepa_reflection_lm"]
@@ -199,6 +216,15 @@ def main(
         )
     else:
         typer.echo(f"  components:           {', '.join(COMPONENTS)} (round-robin, all four mutable)")
+    if proxy_mode != "none":
+        typer.echo(
+            f"  evaluation:           PROXY '{proxy_mode}' (docs/decisions/0020) -- seed-built memory, only "
+            f"evidence{' + top-' + str(gepa_cfg.get('proxy_competitors_k', 10)) + ' competitor' if proxy_mode == 'competitors' else ''} "
+            "notes re-constructed per candidate. Validation/minibatch numbers are SURROGATE scores; "
+            "re-score the winner with a full build before committing it."
+        )
+    else:
+        typer.echo("  evaluation:           full memory build per candidate")
     typer.echo(f"  seed candidate:       {seed_dir}")
     for name, path in sorted(seed_overrides.items()):
         typer.echo(f"    override:           {name} <- {path}")
@@ -240,7 +266,7 @@ def main(
     # seed it grew from. Resuming under a different --component would freeze
     # the wrong three prompts and zero-score the pool's own candidates.
     stage_path = run_dir / "stage.json"
-    stage_info = {"component": component, "seed_hash": candidate_hash(seed_candidate)}
+    stage_info = {"component": component, "seed_hash": candidate_hash(seed_candidate), "proxy_mode": proxy_mode}
     if stage_path.exists():
         prior = json.loads(stage_path.read_text())
         if prior != stage_info:
@@ -293,6 +319,9 @@ def main(
         max_metric_calls=gepa_cfg["max_metric_calls"],
         stats_path=run_dir / "adapter_stats.json",
         frozen_components=frozen,
+        seed_candidate=seed_candidate,
+        proxy_mode=proxy_mode,
+        proxy_competitors_k=gepa_cfg.get("proxy_competitors_k", 10),
     )
 
     # Provenance for chaining stages and for the experiment doc's prompt
@@ -334,6 +363,7 @@ def main(
         "smoke": smoke,
         "resumed": resuming,
         "component": component,
+        "proxy_mode": proxy_mode,
         "frozen_components": sorted(frozen),
         "frozen_intact": frozen_intact,
         "seed_candidate_dir": str(seed_dir),
@@ -356,6 +386,12 @@ def main(
         "src/amem_gepa/prompts/<component>.v<N>.txt (never overwrite baseline_repro/, per CLAUDE.md) "
         "and write the docs/experiments/NNN-*.md entry, including Cost, in the same PR."
     )
+    if proxy_mode != "none":
+        typer.echo(
+            f"\nPROXY RUN (docs/decisions/0020): best_val_aggregate above is a surrogate score. Before "
+            f"committing this winner, re-score it with full builds on validation:\n"
+            f"  just gepa-test-eval {best_dir} --split val --yes"
+        )
     if component:
         nxt = COMPONENT_ORDER.index(component) + 1
         if nxt < len(COMPONENT_ORDER):

@@ -139,14 +139,16 @@ def evaluate_arm(
         if not pending:
             continue
 
-        agent, _trace, cache_hit, build_error = adapter.build_for_conversation(
-            candidate, conv_id, conv_instances[0].turns
+        agent, _trace, cache_hit, build_error, renoted = adapter.agent_for_questions(
+            candidate, conv_id, conv_instances[0].turns, [q for _, q in pending]
         )
         logger.info(
             "[%s] %s: memory %s, %d questions to answer",
             arm,
             conv_id,
-            "loaded from cache" if cache_hit else ("build FAILED" if build_error else "built"),
+            f"PROXY -- seed build with {renoted} notes re-constructed (docs/decisions/0020)"
+            if renoted
+            else ("loaded from cache" if cache_hit else ("build FAILED" if build_error else "built")),
             len(pending),
         )
 

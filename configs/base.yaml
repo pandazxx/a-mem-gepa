@@ -72,6 +72,16 @@ gepa_single_component:
   # attention, and four stages cost ~1.6x the joint run. Confirm per stage
   # with the run plan (no --yes) before starting.
   max_metric_calls: 800
+  # docs/decisions/0020 -- surrogate evaluation for the note_construction
+  # stage only: 'none' (full build per candidate), 'evidence' (seed-built
+  # memory, re-construct only each question's evidence notes with the
+  # candidate prompt), or 'competitors' (evidence + the seed memory's top-k
+  # retrieval hits per question). ~4 / ~15-20 min per minibatch group vs
+  # ~90 min. Surrogate only: the stage winner must be re-scored with full
+  # builds (`just gepa-test-eval <best> --split val`) before it is committed.
+  # CLI: --proxy evidence|competitors overrides this.
+  proxy_mode: none
+  proxy_competitors_k: 10
 
 # Overrides applied on top of `gepa:` when run_gepa_optimize.py gets
 # --smoke (`just gepa-smoke`): a tiny sanity pass on truncated
