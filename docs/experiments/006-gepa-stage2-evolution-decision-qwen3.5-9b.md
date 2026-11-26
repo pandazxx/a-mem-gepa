@@ -135,10 +135,47 @@ add a level, not a decision.
 
 ## Before/after prompt diff
 
-**TODO.** `best_candidate/evolution_decision.txt` to be committed as
-`src/amem_gepa/prompts/evolution_decision.v1.txt`; diff against
-`baseline_repro/evolution_decision.txt` goes here (committed whether or not
-adopted).
+Committed as `src/amem_gepa/prompts/evolution_decision.v1.txt` (commit
+`4258e8b`; kept on record, not adopted — see Conclusion). The paper's
+prompt is 20 lines; the rewrite is 25 lines of prose, so a line diff is not
+informative. What changed, in substance:
+
+- **The decision is explicitly biased toward evolving.** The paper's prompt
+  lists the four options neutrally. The rewrite names "retrieval
+  reachability for multi-hop questions" as the primary goal, says
+  STRENGTHEN "is crucial when the memory contains evidence for a multi-hop
+  question", and instructs "Avoid NO_EVOLUTION when merging memories would
+  cause a loss of retrieval signal". This is the over-linking push the
+  gate table suggested: more links, more context per answer, better
+  factual recall, more confident wrong answers on trap questions.
+- **Training-conversation specifics leaked into the prompt.** The rewrite
+  cites "Sam", "Evan", "Tim", painting, yoga, language learning,
+  German/Spanish, job loss, "What helps Sam relax?" — all from the 5
+  training conversations' reflection examples. A prompt that names
+  training entities is the textbook form of over-fitting to the train set,
+  and it is what GEPA's default reflection template asks for ("identify
+  all niche and domain specific factual information about the task and
+  include it in the instruction"). That instruction is written for tasks
+  where the facts generalise; here they do not.
+- **The placeholders were kept, but not where the data needs them.** The
+  paper's prompt puts `{content}`, `{context}`, `{keywords}` and
+  `{nearest_neighbors_memories}` in labelled lines ("New memory: -
+  Context: {context} ..."). The rewrite mentions them once, inside a
+  sentence copied from our CONSTRAINT feedback: "The system will inject
+  data into this template using exactly these placeholders: {content},
+  {context}, {keywords}, {nearest_neighbors_memories}." At format time the
+  actual turn text, context, keywords and the whole neighbour block are
+  substituted *into that sentence*, comma-separated and unlabelled. The
+  template is valid (`validate_candidate` passes, so no build was refused)
+  but the task model receives its inputs as an unlabelled run-on list.
+  That the candidate still scored a paired +3.6 overall says more about
+  how little the decision call depends on reading its inputs carefully
+  than about the prompt. Two follow-ups fall out: the CONSTRAINT text
+  should tell the coach to keep a labelled input block, not just to keep
+  the placeholders; and 0014's validation could warn when all placeholders
+  sit on one line.
+- **The output format was kept** (`DECISION:` / `REASON:` lines), with an
+  added instruction not to emit markdown fences.
 
 ## Cost
 
@@ -198,14 +235,20 @@ middle path worth considering: keep the candidate *file* committed
 (`evolution_decision.v1.txt`, history is the point) but seed stage 3 from
 stage 1's winner, and revisit the decision prompt after the two remaining
 evolution stages, when the adversarial behaviour of the whole evolution
-stack can be judged together. **Decision recorded here once made:** TODO.
+stack can be judged together.
+
+**Decision (2026-11-26): discarded as a seed; kept on record.** The user
+chose to rerun this stage with only the coach changed (a larger local model,
+`ollama/qwen3.8:27b`) and compare the two winners head to head —
+[007](007-gepa-stage2-rerun-coach-qwen27b.md). Stage 3's seed is decided
+after that comparison; until then the accepted candidate is stage 1's
+winner (`note_construction.v1` + the paper's evolution prompts).
 
 Next steps:
 
-1. Record the keep/discard decision above.
-2. Commit `best_candidate/evolution_decision.txt` as
-   `src/amem_gepa/prompts/evolution_decision.v1.txt`; fill the diff; fill
+1. ~~Record the keep/discard decision above.~~ Done: discarded, kept on record.
+2. ~~Commit `evolution_decision.v1.txt`; fill the diff.~~ Done. Still open:
    the Pareto table and the seed validation line from `run_log.txt`.
-3. Stage 3 (`evolution_strengthen`). If discarded:
-   `just gepa-optimize-component evolution_strengthen --seed-file note_construction=src/amem_gepa/prompts/note_construction.v1.txt --yes`
-   If kept, add `--seed-file evolution_decision=src/amem_gepa/prompts/evolution_decision.v1.txt`.
+3. Rerun this stage with the 27B coach ([007](007-gepa-stage2-rerun-coach-qwen27b.md)),
+   then the paired head-to-head of the two winners.
+4. Stage 3 (`evolution_strengthen`), seeded per 007's verdict.
