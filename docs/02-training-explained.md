@@ -435,6 +435,22 @@ Things the adapter does to cope ([ADR 0015](decisions/0015-gepa-training-method.
 - **Progress and ETA** lines during builds and question answering, plus a
   run-level line with the budget consumed.
 
+### 7.1 A cheaper rollout for the note-construction stage (proposed)
+
+When only the note-construction prompt is being trained, most of a build
+is spent re-deriving things the candidate cannot change: the evolution
+prompts are frozen and the raw messages are the same. ADR 0020 proposes a
+surrogate: load the memory built once with the seed prompts, re-write
+only the index cards that matter for the questions being asked (the
+evidence messages, optionally plus the cards they compete with in search)
+using the candidate's prompt, re-embed just those cards, and answer. That
+is a handful of LLM calls instead of ~1,900. What it cannot see is how the
+candidate would have changed every *other* card and the links the
+evolution step would have made from different inputs, so it is used for
+the training loop only; a stage winner is always re-scored with a real
+build before it is kept. It is available behind `--proxy` and awaits the
+calibration run described in the ADR.
+
 ## 8. The two pipelines, and whether the gap is just a translation problem
 
 The project has a second, older pipeline that predates the discovery of

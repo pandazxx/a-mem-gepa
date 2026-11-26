@@ -51,7 +51,7 @@ from typing import Any
 from gepa.core.adapter import EvaluationBatch
 
 from amem_gepa.datasets.locomo import LoCoMoInstance, LoCoMoQuestionGroup
-from amem_gepa.gepa_stages import frozen_violations
+from amem_gepa.gepa_stages import changed_components, frozen_violations
 from amem_gepa.paper_repro import (
     _format_duration,
     _ollama_call_stats,
@@ -107,7 +107,19 @@ _STATS_FIELDS = (
     "evaluations",
     "build_seconds",
     "qa_seconds",
+    "proxy_evaluations",
+    "proxy_renotes",
 )
+
+# docs/decisions/0020: evaluation modes for a note_construction stage.
+#   none         -- every candidate gets a full memory build (the default).
+#   evidence     -- seed-built memory; re-construct only the notes that are
+#                   evidence for the batch's questions with the candidate's
+#                   note-construction prompt (tier A).
+#   competitors  -- evidence notes plus the seed memory's top-k retrieval
+#                   results for each question, the direct competitors (tier A+).
+PROXY_MODES = ("none", "evidence", "competitors")
+PROXY_COMPONENT = "note_construction"
 
 
 @dataclass
@@ -132,6 +144,9 @@ class ItemTrajectory:
     build_cache_hit: bool = False
     error: str | None = None
     validation_errors: list[str] = field(default_factory=list)
+    # docs/decisions/0020: number of notes re-constructed on a seed-built
+    # memory instead of a full build (0 = full build or cache hit).
+    proxy_renoted: int = 0
 
 
 class AMemGEPAAdapter:
@@ -165,9 +180,31 @@ class AMemGEPAAdapter:
         stats_path: Path | None = None,
         ensure_nltk: bool = True,
         frozen_components: Mapping[str, str] | None = None,
+        seed_candidate: Mapping[str, str] | None = None,
+        proxy_mode: str = "none",
+        proxy_competitors_k: int = 10,
     ):
         if adversarial_scoring not in ("refusal", "paper"):
             raise ValueError(f"adversarial_scoring must be 'refusal' or 'paper', got {adversarial_scoring!r}")
+        if proxy_mode not in PROXY_MODES:
+            raise ValueError(f"proxy_mode must be one of {PROXY_MODES}, got {proxy_mode!r}")
+        self.seed_candidate = dict(seed_candidate) if seed_candidate else None
+        self.proxy_mode = proxy_mode
+        self.proxy_competitors_k = proxy_competitors_k
+        if proxy_mode != "none":
+            # docs/decisions/0020: the surrogate re-notes on a memory built
+            # with the SEED prompts, so it needs the seed, and it is only a
+            # faithful surrogate when nothing but note_construction can
+            # differ from that seed -- i.e. a 0019 stage with the other
+            # three components frozen.
+            if self.seed_candidate is None:
+                raise ValueError("proxy_mode requires seed_candidate (the prompts the cached memory was built with)")
+            expected_frozen = {c for c in self.seed_candidate if c != PROXY_COMPONENT}
+            if set(frozen_components or {}) != expected_frozen:
+                raise ValueError(
+                    f"proxy_mode is only valid for a {PROXY_COMPONENT} stage: frozen_components must be "
+                    f"exactly {sorted(expected_frozen)}, got {sorted(frozen_components or {})}"
+                )
         self.backend = backend
         # docs/decisions/0019: in a single-component run, the other three
         # prompts must stay byte-identical to the seed. GEPA's FixedComponent
@@ -201,6 +238,8 @@ class AMemGEPAAdapter:
         self.evaluations = 0
         self.build_seconds = 0.0
         self.qa_seconds = 0.0
+        self.proxy_evaluations = 0
+        self.proxy_renotes = 0
         # Wall-clock carried over from a previous process of the same run.
         self.prior_elapsed_seconds = 0.0
         self._started = time.monotonic()
@@ -286,6 +325,15 @@ class AMemGEPAAdapter:
         total_questions = sum(
             len(item.questions) if isinstance(item, LoCoMoQuestionGroup) else 1 for item in batch
         )
+        # Every question this batch will ask of each conversation -- the
+        # proxy (docs/decisions/0020) needs the whole set before it decides
+        # which notes to re-construct, since one memory serves all of them.
+        questions_by_key: dict[tuple[str, int], list[LoCoMoInstance]] = {}
+        for item in batch:
+            key = (self._conv_id(item), len(self._turns(item)))
+            questions_by_key.setdefault(key, []).extend(
+                item.questions if isinstance(item, LoCoMoQuestionGroup) else [item]
+            )
         qa_tracker = _ProgressTracker(logger, f"[eval #{self.evaluations + 1}] QA", total_questions)
 
         for item in batch:
@@ -293,14 +341,17 @@ class AMemGEPAAdapter:
             turns = self._turns(item)
             agent_key = (conv_id, len(turns))
             if agent_key not in agents:
-                agents[agent_key] = self._build_or_load(candidate, cand_hash, conv_id, turns)
-            agent, build_trace, cache_hit, build_error = agents[agent_key]
+                agents[agent_key] = self._agent_for(
+                    candidate, cand_hash, conv_id, turns, questions_by_key[agent_key]
+                )
+            agent, build_trace, cache_hit, build_error, renoted = agents[agent_key]
 
             traj = ItemTrajectory(
                 conversation_id=conv_id,
                 build_records=build_trace.records if build_trace else [],
                 build_cache_hit=cache_hit,
                 error=build_error,
+                proxy_renoted=renoted,
             )
             questions = item.questions if isinstance(item, LoCoMoQuestionGroup) else [item]
 
@@ -634,6 +685,9 @@ class AMemGEPAAdapter:
         if self.questions_answered:
             bits.append(f"avg_qa={self.qa_seconds / self.questions_answered:.1f}s")
         bits.append(f"llm_calls={self.llm_calls}")
+        if self.proxy_evaluations:
+            bits.append(f"proxy_evals={self.proxy_evaluations}")
+            bits.append(f"renoted={self.proxy_renotes}")
         if self.max_metric_calls:
             bits.append(f"metric_calls={self.metric_calls}/{self.max_metric_calls}")
             eta = self.eta_seconds()
@@ -693,6 +747,185 @@ class AMemGEPAAdapter:
         if problems:
             raise ValueError(f"invalid candidate: {problems}")
         return self._build_or_load(candidate, candidate_hash(candidate), conv_id, turns)
+
+    def agent_for_questions(
+        self, candidate: dict[str, str], conv_id: str, turns: list, questions: list[LoCoMoInstance]
+    ) -> tuple:
+        """Like build_for_conversation, but honours proxy_mode (docs/decisions/
+        0020) when the candidate qualifies. Returns (agent, BuildTrace|None,
+        cache_hit, error|None, notes_re-constructed)."""
+        problems = validate_candidate(candidate) + frozen_violations(candidate, self.frozen_components)
+        if problems:
+            raise ValueError(f"invalid candidate: {problems}")
+        return self._agent_for(candidate, candidate_hash(candidate), conv_id, turns, questions)
+
+    # ------------------------------------------------------------------
+    # proxy evaluation for a note_construction stage (docs/decisions/0020)
+    # ------------------------------------------------------------------
+
+    def _proxy_applies(self, candidate: dict[str, str]) -> bool:
+        """The surrogate is used only when the candidate differs from the
+        seed in note_construction and nothing else. The seed itself takes
+        the normal path (a cache hit), so its proxy score IS its full-build
+        score, which keeps the two scales anchored at the baseline."""
+        if self.proxy_mode == "none" or self.seed_candidate is None:
+            return False
+        changed = changed_components(candidate, self.seed_candidate)
+        return changed == [PROXY_COMPONENT]
+
+    def _agent_for(
+        self, candidate: dict[str, str], cand_hash: str, conv_id: str, turns: list, questions: list
+    ) -> tuple:
+        if self._proxy_applies(candidate):
+            return self._proxy_agent(candidate, cand_hash, conv_id, turns, questions)
+        agent, trace, cache_hit, error = self._build_or_load(candidate, cand_hash, conv_id, turns)
+        return agent, trace, cache_hit, error, 0
+
+    def _proxy_agent(
+        self, candidate: dict[str, str], cand_hash: str, conv_id: str, turns: list, questions: list
+    ) -> tuple:
+        """Seed-built memory + the candidate's note-construction prompt applied
+        only to the notes that matter for `questions`. See docs/decisions/0020
+        for what this captures (the evidence notes' own retrievability) and
+        what it deliberately does not (distractor competition beyond the
+        sampled competitors, evolution inputs, consolidation timing)."""
+        seed_hash = candidate_hash(self.seed_candidate)
+        seed_paths = self._cache_paths(seed_hash, conv_id, len(turns))
+        if not seed_paths["memories"].exists():
+            # One-time: the seed build is the thing every proxy evaluation of
+            # this conversation reuses. Built through the normal path so it is
+            # cached (and checkpointed) exactly like any other build.
+            logger.info("[%s] proxy: no cached seed build -- building it once", conv_id)
+            _agent, _trace, _hit, seed_error = self._build_or_load(
+                self.seed_candidate, seed_hash, conv_id, turns
+            )
+            if seed_error is not None:
+                return None, None, False, f"seed build failed: {seed_error}", 0
+
+        # A fresh agent wrapped for the CANDIDATE (so RecordingLLM classifies
+        # the re-noting calls under the candidate's template prefix), loaded
+        # with the seed's memory. Each load deserializes fresh objects, so
+        # mutating them never touches the cached seed on disk.
+        try:
+            agent = self._make_agent(candidate)
+            with open(seed_paths["memories"], "rb") as f:
+                memories = pickle.load(f)
+            agent.memory_system.memories = memories
+            if seed_paths["retriever"].exists():
+                agent.memory_system.retriever = agent.memory_system.retriever.load(
+                    str(seed_paths["retriever"]), str(seed_paths["retriever_embeddings"])
+                )
+            else:
+                agent.memory_system.retriever = agent.memory_system.retriever.load_from_local_memory(
+                    memories, "all-MiniLM-L6-v2"
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[%s] proxy: could not load the seed build (%s) -- full build instead", conv_id, e)
+            agent, trace, cache_hit, error = self._build_or_load(candidate, cand_hash, conv_id, turns)
+            return agent, trace, cache_hit, error, 0
+
+        notes = list(agent.memory_system.memories.values())
+        if len(notes) != len(turns):
+            # The turn->note mapping the proxy relies on does not hold (a
+            # truncated or partial build under this key?); be correct, not fast.
+            logger.warning(
+                "[%s] proxy: seed build has %d notes for %d turns -- full build instead",
+                conv_id, len(notes), len(turns),
+            )  # fmt: skip
+            agent, trace, cache_hit, error = self._build_or_load(candidate, cand_hash, conv_id, turns)
+            return agent, trace, cache_hit, error, 0
+
+        evidence_idx, competitor_idx = self._select_renote_indices(agent, turns, questions)
+        selected = sorted(evidence_idx | competitor_idx)
+        recorder = agent.memory_system.llm_controller.llm
+        records_before = len(recorder.records)
+        started = time.monotonic()
+        try:
+            with injected_prompts(candidate):
+                for idx in selected:
+                    self._renote(agent, idx, turns[idx])
+        except Exception as e:  # noqa: BLE001
+            logger.error("[%s] proxy: re-noting failed: %s", conv_id, e)
+            return None, None, False, f"proxy re-noting failed: {e}", 0
+
+        new_records = list(recorder.records[records_before:])
+        trace = BuildTrace(conversation_id=conv_id, candidate_hash=cand_hash, records=new_records)
+        self.proxy_evaluations += 1
+        self.proxy_renotes += len(selected)
+        self.llm_calls += len(new_records)
+        logger.info(
+            "[%s] proxy(%s): re-noted %d of %d notes (%d evidence, %d competitors) with candidate %s "
+            "in %s, %d LLM calls",
+            conv_id, self.proxy_mode, len(selected), len(notes), len(evidence_idx),
+            len(competitor_idx - evidence_idx), cand_hash[:8],
+            _format_duration(time.monotonic() - started), len(new_records),
+        )  # fmt: skip
+        return agent, trace, True, None, len(selected)
+
+    def _select_renote_indices(self, agent, turns: list, questions: list) -> tuple[set[int], set[int]]:
+        """Note indices to re-construct. Evidence: LoCoMo's per-question
+        evidence dia_ids mapped through turn order (note i == turn i).
+        Competitors (mode 'competitors'): the seed memory's top-k retrieval
+        for the question text -- the notes the evidence has to out-rank.
+        The question text, not an LLM keyword query, keeps this free of LLM
+        calls; it is a sampling heuristic for channel (b) in 0020, not a
+        reproduction of answer-time retrieval."""
+        by_dia = {t.dia_id: i for i, t in enumerate(turns)}
+        evidence: set[int] = set()
+        competitors: set[int] = set()
+        for q in questions:
+            for dia in q.evidence or []:
+                if dia in by_dia:
+                    evidence.add(by_dia[dia])
+            if self.proxy_mode == "competitors" and agent.memory_system.memories:
+                try:
+                    hits = agent.memory_system.retriever.search(q.question, self.proxy_competitors_k)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("proxy: competitor lookup failed (%s) -- evidence only for this question", e)
+                    hits = []
+                competitors.update(int(i) for i in hits if 0 <= int(i) < len(turns))
+        return evidence, competitors
+
+    def _renote(self, agent, idx: int, turn) -> None:
+        """Re-run note construction for one stored note under the currently
+        injected prompts and re-embed its retriever row. Mirrors what
+        add_note did for it originally (RobustMemoryNote.analyze_content ->
+        keywords/context/tags; retriever document from those fields); links
+        and every other note are left as the seed built them."""
+        ensure_repro_repo_importable()
+        from memory_layer_robust import RobustMemoryNote
+
+        content = "Speaker " + turn.speaker + "says : " + turn.text
+        analysis = RobustMemoryNote.analyze_content(content, agent.memory_system.llm_controller)
+        note = list(agent.memory_system.memories.values())[idx]
+        note.keywords = analysis.get("keywords") or []
+        context = analysis.get("context") or "General"
+        note.context = " ".join(context) if isinstance(context, list) else context
+        note.tags = analysis.get("tags") or []
+        self._reembed(agent.memory_system.retriever, idx, note)
+
+    @staticmethod
+    def _reembed(retriever, idx: int, note) -> None:
+        """Replace retriever row `idx` with the re-noted document, in whichever
+        of the vendored code's two document formats that row currently uses
+        (add_documents' 'content: ... context: ...' form, or the
+        'content , metadata' form consolidate_memories rebuilds with)."""
+        old_doc = retriever.corpus[idx]
+        if old_doc.startswith("content:"):
+            new_doc = (
+                "content:" + note.content + " context:" + note.context
+                + " keywords: " + ", ".join(note.keywords) + " tags: " + ", ".join(note.tags)
+            )  # fmt: skip
+        else:
+            metadata = f"{note.context} {' '.join(note.keywords)} {' '.join(note.tags)}"
+            new_doc = note.content + " , " + metadata
+        retriever.corpus[idx] = new_doc
+        retriever.embeddings[idx] = retriever.model.encode([new_doc])[0]
+        ids = getattr(retriever, "document_ids", None)
+        if isinstance(ids, dict):
+            if ids.get(old_doc) == idx:
+                ids.pop(old_doc, None)
+            ids[new_doc] = idx
 
     def _score(self, prediction: str, q: LoCoMoInstance, reference: str) -> float:
         ensure_repro_repo_importable()
