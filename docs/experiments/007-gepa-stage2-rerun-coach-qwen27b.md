@@ -2,12 +2,15 @@
 
 - Date: **not yet run**
 - Config: `configs/stage2-coach-qwen27b.yaml` — identical to `configs/base.yaml`
-  except `models.gepa_reflection_lm: ollama/qwen3.8:27b` pinned (commit hash: )
+  except `models.gepa_reflection_lm: ollama/qwen3.8:27b` pinned and
+  `gepa.reflection.thinking: true` (commit hash: )
 - GEPA budget: `max_metric_calls=800` (`gepa_single_component`),
   `reflection_minibatch_size=2`, task model `ollama/qwen3.5:9b` (thinking
   off, ADR 0016/0017), **reflection model `ollama/qwen3.8:27b`** (thinking:
   model default, i.e. on — same as 006's coach), `retrieve_k=10`,
-  `adversarial_scoring=refusal`
+  `adversarial_scoring=refusal`; coach thinking pinned on via
+  `gepa.reflection.thinking: true` (ADR 0021) rather than left to the model
+  default
 - Component optimized: **`evolution_decision`**; frozen: `note_construction`,
   `evolution_strengthen`, `evolution_update_neighbors`
 - Seed: identical to [006](006-gepa-stage2-evolution-decision-qwen3.5-9b.md)
