@@ -151,7 +151,7 @@ def test_claude_coach_warns_once_about_unpriced_models(caplog):
 
 def test_build_reflection_lm_dispatches_on_provider_prefix(monkeypatch):
     fake_ollama = types.ModuleType("ollama")
-    fake_ollama.Client = lambda host=None: _FakeOllamaClient()
+    fake_ollama.Client = lambda host=None, timeout=None: _FakeOllamaClient()
     monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
     assert isinstance(build_reflection_lm(ReflectionSettings("ollama/qwen3.5:9b")), OllamaReflectionLM)
 
@@ -165,3 +165,65 @@ def test_build_reflection_lm_dispatches_on_provider_prefix(monkeypatch):
     other = build_reflection_lm(ReflectionSettings("openai/gpt-4o-mini", max_tokens=1234))
     assert isinstance(other, LM) and other.completion_kwargs == {"max_tokens": 1234}
     assert reflection_stats(other)["reflection_cost_usd"] == 0.0
+
+
+class _FakeOllamaClientWithPs(_FakeOllamaClient):
+    def __init__(self, size=27e9, size_vram=16e9):
+        super().__init__()
+        self._size, self._size_vram = size, size_vram
+
+    def ps(self):
+        return types.SimpleNamespace(
+            models=[types.SimpleNamespace(model="qwen3.8:27b", size=self._size, size_vram=self._size_vram)]
+        )
+
+
+def test_ollama_coach_logs_each_call_and_warns_when_the_model_spills_to_cpu(caplog):
+    client = _FakeOllamaClientWithPs(size=27e9, size_vram=16e9)
+    lm = OllamaReflectionLM(ReflectionSettings("ollama/qwen3.8:27b", thinking=True, request_timeout_s=3600), client=client)
+    with caplog.at_level(logging.INFO, logger="amem_gepa.reflection_lm"):
+        lm("rewrite this")
+        lm("rewrite again")
+    text = caplog.text
+    assert "[coach] call 1 -> qwen3.8:27b (think=True" in text and "timeout 3600s" in text
+    assert "[coach] call 1 done in" in text and "prompt_eval=120 eval=30" in text
+    assert "thinking returned separately" in text
+    # Placement is reported once, after the first call, and flags the CPU spill-over.
+    assert text.count("ollama ps:") == 1
+    assert "59% in VRAM -- partly on CPU" in text
+
+
+def test_ollama_coach_placement_is_quiet_when_the_model_fits(caplog):
+    client = _FakeOllamaClientWithPs(size=27e9, size_vram=27e9)
+    lm = OllamaReflectionLM(ReflectionSettings("ollama/qwen3.8:27b"), client=client)
+    with caplog.at_level(logging.INFO, logger="amem_gepa.reflection_lm"):
+        lm("x")
+    assert "100% in VRAM" in caplog.text and "partly on CPU" not in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_ollama_coach_passes_timeout_to_the_client(monkeypatch):
+    seen = {}
+
+    def fake_client(host=None, timeout=None):
+        seen.update(host=host, timeout=timeout)
+        return _FakeOllamaClient()
+
+    fake_ollama = types.ModuleType("ollama")
+    fake_ollama.Client = fake_client
+    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    monkeypatch.setenv("OLLAMA_HOST", "http://gpu-box:11434")
+    OllamaReflectionLM(ReflectionSettings("ollama/qwen3.8:27b", request_timeout_s=1800))
+    assert seen == {"host": "http://gpu-box:11434", "timeout": 1800}
+
+    s = ReflectionSettings.from_config("ollama/qwen3.8:27b", {"request_timeout_s": 3600})
+    assert s.request_timeout_s == 3600.0 and "timeout 3600s" in s.describe()
+    assert ReflectionSettings.from_config("ollama/x", {}).request_timeout_s is None
+
+
+def test_claude_coach_logs_each_call_with_running_cost(caplog):
+    lm = ClaudeReflectionLM(ReflectionSettings("anthropic/claude-opus-5-5"), client=_FakeAnthropic(_claude_response()))
+    with caplog.at_level(logging.INFO, logger="amem_gepa.reflection_lm"):
+        lm("x")
+    assert "[coach] call 1 -> claude-opus-5-5 (effort=high)" in caplog.text
+    assert "in=5000 out=1500, run total $0.050" in caplog.text

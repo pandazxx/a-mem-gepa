@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -74,6 +75,11 @@ class ReflectionSettings:
     # by default per the Claude API guidance; a fallback is logged with the
     # model that actually answered, so the experiment doc can record it.
     fallbacks: bool = True
+    # Ollama only: HTTP timeout per coach call, seconds. None = wait forever
+    # (the ollama client's own default). A large thinking model that spills
+    # to CPU can take an hour per call and look like a hang; a timeout turns
+    # that into an error gepa logs and skips.
+    request_timeout_s: float | None = None
 
     @classmethod
     def from_config(cls, model: str, reflection_cfg: dict[str, Any] | None) -> ReflectionSettings:
@@ -91,6 +97,9 @@ class ReflectionSettings:
             max_tokens=int(cfg.get("max_tokens", 16000)),
             max_cost_usd=None if cfg.get("max_cost_usd") is None else float(cfg["max_cost_usd"]),
             fallbacks=bool(cfg.get("fallbacks", True)),
+            request_timeout_s=(
+                None if cfg.get("request_timeout_s") is None else float(cfg["request_timeout_s"])
+            ),
         )
 
     @property
@@ -105,7 +114,11 @@ class ReflectionSettings:
         """One line for the run plan."""
         if self.provider == "ollama":
             think = "model default (on for qwen3.5)" if self.thinking is None else ("on" if self.thinking else "off")
-            return f"{self.model} via native ollama, thinking {think}, max_tokens={self.max_tokens}, $0"
+            timeout = f"{self.request_timeout_s:.0f}s" if self.request_timeout_s else "none"
+            return (
+                f"{self.model} via native ollama, thinking {think}, max_tokens={self.max_tokens}, "
+                f"timeout {timeout}, $0"
+            )
         if self.provider == "anthropic":
             cap = f", cost cap ${self.max_cost_usd:.2f}" if self.max_cost_usd is not None else ", NO cost cap"
             return (
@@ -157,7 +170,9 @@ class OllamaReflectionLM(_Tracked):
 
             # Same endpoint resolution as the task model: the native client
             # reads OLLAMA_HOST (docs/decisions/0013's dual-variable note).
-            client = ollama.Client(host=os.environ.get("OLLAMA_HOST") or None)
+            client = ollama.Client(
+                host=os.environ.get("OLLAMA_HOST") or None, timeout=settings.request_timeout_s
+            )
         self._client = client
 
     def __call__(self, prompt: str | list[dict[str, Any]]) -> str:
@@ -169,13 +184,67 @@ class OllamaReflectionLM(_Tracked):
         }
         if self.settings.thinking is not None:
             kwargs["think"] = self.settings.thinking
+        prompt_chars = sum(len(str(m.get("content", ""))) for m in messages)
+        # The coach is the one call in a GEPA iteration that the build/QA
+        # progress lines do not cover; without these two lines a slow coach
+        # (first load of a large model, CPU spill-over) looks like a hang.
+        logger.info(
+            "[coach] call %d -> %s (think=%s, prompt %d chars, timeout %s) ...",
+            self.calls + 1,
+            self.model,
+            self.settings.thinking,
+            prompt_chars,
+            f"{self.settings.request_timeout_s:.0f}s" if self.settings.request_timeout_s else "none",
+        )
+        started = time.monotonic()
         response = self._client.chat(**kwargs)
+        elapsed = time.monotonic() - started
         message = response.get("message") or {}
         content = message.get("content") or ""
         self.calls += 1
-        self.total_tokens_in += int(response.get("prompt_eval_count") or 0)
-        self.total_tokens_out += int(response.get("eval_count") or 0)
+        tokens_in = int(response.get("prompt_eval_count") or 0)
+        tokens_out = int(response.get("eval_count") or 0)
+        self.total_tokens_in += tokens_in
+        self.total_tokens_out += tokens_out
+        logger.info(
+            "[coach] call %d done in %.0fs: prompt_eval=%d eval=%d (reply %d chars%s)",
+            self.calls,
+            elapsed,
+            tokens_in,
+            tokens_out,
+            len(content),
+            ", thinking returned separately" if message.get("thinking") else "",
+        )
+        if self.calls == 1:
+            self._log_placement()
         return content
+
+    def _log_placement(self) -> None:
+        """After the first call, say where Ollama put the coach model. A
+        model larger than free VRAM is split to CPU and runs many times
+        slower -- the single most likely reason a coach call takes an hour."""
+        try:
+            running = getattr(self._client.ps(), "models", None) or []
+        except Exception as e:  # noqa: BLE001 -- diagnostics must never fail the run
+            logger.info("[coach] could not query `ollama ps`: %s", e)
+            return
+        for entry in running:
+            name = getattr(entry, "model", None) or getattr(entry, "name", "?")
+            size = int(getattr(entry, "size", 0) or 0)
+            size_vram = int(getattr(entry, "size_vram", 0) or 0)
+            if not size:
+                continue
+            gpu_share = size_vram / size
+            line = "[coach] ollama ps: %s %.1f GB, %.0f%% in VRAM"
+            if gpu_share < 0.99:
+                logger.warning(
+                    line + " -- partly on CPU; expect calls many times slower than on GPU",
+                    name,
+                    size / 1e9,
+                    gpu_share * 100,
+                )
+            else:
+                logger.info(line, name, size / 1e9, gpu_share * 100)
 
     def __repr__(self) -> str:
         return f"OllamaReflectionLM({self.model!r}, think={self.settings.thinking})"
@@ -233,7 +302,10 @@ class ClaudeReflectionLM(_Tracked):
 
     def __call__(self, prompt: str | list[dict[str, Any]]) -> str:
         kwargs = self.request_kwargs(prompt)
+        logger.info("[coach] call %d -> %s (effort=%s) ...", self.calls + 1, self.model, self.effort)
+        started = time.monotonic()
         response = self._client.beta.messages.create(**kwargs)
+        elapsed = time.monotonic() - started
         self.calls += 1
         usage = getattr(response, "usage", None)
         tokens_in = int(getattr(usage, "input_tokens", 0) or 0)
@@ -243,6 +315,14 @@ class ClaudeReflectionLM(_Tracked):
         price = self._price()
         if price is not None:
             self.total_cost += (tokens_in * price[0] + tokens_out * price[1]) / 1_000_000
+        logger.info(
+            "[coach] call %d done in %.0fs: in=%d out=%d, run total $%.3f",
+            self.calls,
+            elapsed,
+            tokens_in,
+            tokens_out,
+            self.total_cost,
+        )
         served_by = getattr(response, "model", self.model)
         if served_by and served_by != self.model:
             logger.warning(

@@ -77,6 +77,12 @@ gepa:
     # Anthropic only: server-side refusal fallback. A fallback is logged
     # with the model that answered; set false to fail loudly instead.
     fallbacks: true
+    # Ollama only: per-call HTTP timeout in seconds; null = wait forever (the
+    # client's default). A coach that spills to CPU can take an hour per
+    # call and look like a hang; with a timeout the call fails, gepa logs
+    # it and moves on. The log line `[coach] ollama ps: ... in VRAM` after
+    # the first call says whether the model fit.
+    request_timeout_s: null
 
 # Overrides applied on top of `gepa:` when run_gepa_optimize.py gets
 # --component <name> (`just gepa-optimize-component`, docs/decisions/0019):

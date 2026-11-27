@@ -71,6 +71,13 @@ things about that setup were implicit rather than chosen:
   `task_thinking`, so CLAUDE.md's "Cost" section can be filled from one
   file. The run plan prints the coach line and the task-thinking line
   before asking for `--yes`.
+- **Every coach call is logged** (`[coach] call N -> model ... / done in Ns:
+  tokens`), and the Ollama coach reports after its first call where Ollama
+  placed the model (`ollama ps`: size vs. VRAM share, a warning when it is
+  split to CPU). `gepa.reflection.request_timeout_s` (Ollama only; default
+  none, the client's own default) bounds a single call so a CPU-spilled
+  27B that would take an hour fails instead of hanging. Added after the
+  first 007 attempt stalled silently at the first coach call.
 - **Credentials stay in the environment** (`ANTHROPIC_API_KEY`, or an
   `ant auth login` profile the SDK picks up); never in configs or docs.
 
