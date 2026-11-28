@@ -55,6 +55,34 @@ gepa:
   # The paper's verbatim prompts (docs/decisions/0014) -- 4 components
   # matching the repro pipeline, generated from llm_text_parsers' constants.
   seed_candidate_dir: src/amem_gepa/prompts/baseline_repro
+  # The coach (reflection model, docs/decisions/0021). Which model comes
+  # from GEPA_REFLECTION_LM (models.gepa_reflection_lm above):
+  #   ollama/<model>     native ollama client; `thinking` is the think flag
+  #   anthropic/<model>  official anthropic SDK; thinking is always on,
+  #                      `effort` sets its depth; cost is metered below
+  #   anything else      LiteLLM, as before
+  reflection:
+    # Ollama: true/false, or null for the model's own default (qwen3.5:9b
+    # defaults to ON -- experiments 004/005 ran the coach that way).
+    # Anthropic: cannot be switched off; false means effort "low".
+    thinking: null
+    # Anthropic only: low | medium | high | xhigh | max (null -> high).
+    effort: null
+    max_tokens: 16000
+    # Stop the run when the coach has spent this much (USD). The coach makes
+    # ~1 call per GEPA iteration (stage 1: 14 calls), so a stage on
+    # claude-opus-5-5 is on the order of $1-3; this cap is a safety net, not
+    # a budget. null = no cap. Ollama is always $0.
+    max_cost_usd: 25.0
+    # Anthropic only: server-side refusal fallback. A fallback is logged
+    # with the model that answered; set false to fail loudly instead.
+    fallbacks: true
+    # Ollama only: per-call HTTP timeout in seconds; null = wait forever (the
+    # client's default). A coach that spills to CPU can take an hour per
+    # call and look like a hang; with a timeout the call fails, gepa logs
+    # it and moves on. The log line `[coach] ollama ps: ... in VRAM` after
+    # the first call says whether the model fit.
+    request_timeout_s: null
 
 # Overrides applied on top of `gepa:` when run_gepa_optimize.py gets
 # --component <name> (`just gepa-optimize-component`, docs/decisions/0019):
@@ -105,3 +133,11 @@ paper_repro:
   retrieve_k: 10  # their default; the paper's headline numbers used a per-model k-sweep
   ratio: 1.0       # fraction of the 10 conversations to evaluate; 1.0 = all
   temperature_c5: 0.5  # matches their --temperature_c5 default
+  # Ollama thinking mode for the TASK model -- `just reproduce`, `just
+  # k-sweep`, GEPA builds/QA and `just gepa-test-eval` all read this one
+  # knob, so baseline and candidate arms always run the same setting.
+  # false = docs/decisions/0016 (every reported run so far). Turning it on
+  # costs ~100x the tokens per call on qwen3.5:9b and keys a separate
+  # build cache (<hash>-think/), so no cached build is reused across the
+  # two settings (docs/decisions/0021).
+  thinking: false

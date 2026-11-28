@@ -565,3 +565,30 @@ def test_build_for_conversation_rejects_frozen_violations_loudly(fake_repro):
     tampered = dict(CANDIDATE, evolution_strengthen=CANDIDATE["evolution_strengthen"] + " x")
     with pytest.raises(ValueError, match="FROZEN"):
         adapter.build_for_conversation(tampered, "conv-a", TURNS)
+
+
+def test_task_thinking_is_forwarded_to_ollama_and_keys_a_separate_cache(fake_repro, monkeypatch, tmp_path):
+    """docs/decisions/0021: `paper_repro.thinking` reaches ollama.chat as
+    think=True, and builds made with thinking on never share a cache entry
+    with thinking-off builds of the same candidate."""
+    seen = []
+    fake_ollama = types.ModuleType("ollama")
+
+    def chat(*args, **kwargs):
+        seen.append(kwargs)
+        return {"message": {"content": "ok"}}
+
+    fake_ollama.chat = chat
+    monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
+
+    thinking = fake_repro(backend="ollama", model="qwen3.5:9b", task_think=True)
+    sys.modules["ollama"].chat(model="qwen3.5:9b", messages=[])
+    assert seen[-1]["think"] is True
+
+    plain = fake_repro(backend="ollama", model="qwen3.5:9b", task_think=False)
+    sys.modules["ollama"].chat(model="qwen3.5:9b", messages=[])
+    assert seen[-1]["think"] is False, "the last adapter constructed decides the default"
+
+    h = candidate_hash(CANDIDATE)
+    assert thinking._cache_paths(h, "conv-a", 3)["dir"].parent.name == f"{h}-think"
+    assert plain._cache_paths(h, "conv-a", 3)["dir"].parent.name == h

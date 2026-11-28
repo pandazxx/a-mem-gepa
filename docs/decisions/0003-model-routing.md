@@ -11,6 +11,10 @@ Partially superseded (2026-11-08) by
   -- runs the vendored repro code's own `RobustLLMController`, configured by
   `PAPER_REPRO_BACKEND`/`PAPER_REPRO_MODEL` (bare model names, not LiteLLM
   strings); see 0013 for the `OLLAMA_HOST`/`OPENAI_BASE_URL` details.
+- **Refined (2026-11-22) by [0021](0021-thinking-mode-config-and-claude-coach.md):**
+  an `ollama/` or `anthropic/` `reflection_lm` now uses that provider's
+  native client (for an explicit `think` flag and the current Claude request
+  shape); LiteLLM remains the route for any other coach.
 - **Still in force:** LiteLLM routes GEPA's `reflection_lm`
   (`GEPA_REFLECTION_LM`) and the legacy `just demo`/`just baseline` pipeline
   (`AMEM_LLM_MODEL`, `llm/litellm_controller.py`).

@@ -272,16 +272,27 @@ class _ProgressTracker:
 
 _ollama_call_stats: list[dict] = []
 
+# What the instrumented ollama.chat injects as `think` when the caller did
+# not pass one. False = docs/decisions/0016's default; docs/decisions/0021
+# makes it configurable (`paper_repro.thinking`). Module-level rather than
+# baked into the closure so a later _patch_ollama_chat(think=...) call can
+# flip it even though the patch itself is installed only once.
+_ollama_think_default: bool = False
+
 
 def _ns_to_s(ns) -> float | None:
     return ns / 1e9 if ns is not None else None
 
 
-def _patch_ollama_chat() -> None:
+def _patch_ollama_chat(think: bool = False) -> None:
     """Idempotent -- safe to call on every run_full_reproduction call
-    (e.g. once per k-sweep value). No-op the second time onward."""
+    (e.g. once per k-sweep value). The instrumentation is installed once;
+    the `think` default it injects is updated on every call, so the last
+    caller's setting wins (docs/decisions/0021)."""
+    global _ollama_think_default
     import ollama
 
+    _ollama_think_default = bool(think)
     if getattr(ollama.chat, "_amem_gepa_instrumented", False):
         return
 
@@ -293,7 +304,7 @@ def _patch_ollama_chat() -> None:
         # changes in practice, but a future/different caller that does
         # pass it explicitly has its choice respected rather than
         # silently fought.
-        kwargs.setdefault("think", False)
+        kwargs.setdefault("think", _ollama_think_default)
         call_start = time.monotonic()
         response = original_chat(*args, **kwargs)
         wall_elapsed = time.monotonic() - call_start
@@ -378,6 +389,7 @@ def run_full_reproduction(
     ratio: float = 1.0,
     temperature_c5: float = 0.5,
     results_dir: Path = Path("results/paper_repro"),
+    think: bool = False,
 ) -> dict:
     """Ported from test_advanced_robust.py:evaluate_dataset, redirecting
     cache/log/output paths under `results_dir` instead of the vendored
@@ -393,7 +405,9 @@ def run_full_reproduction(
     ensure_repro_repo_importable()
     ensure_nltk_data()
     if backend == "ollama":
-        _patch_ollama_chat()
+        # `think` is docs/decisions/0016's switch, configurable since 0021
+        # (`paper_repro.thinking`); False matches every reported run so far.
+        _patch_ollama_chat(think=think)
 
     # Imported here, not at module level: importing test_advanced_robust
     # eagerly loads a SentenceTransformer model and does NLTK downloads at
@@ -584,6 +598,7 @@ def run_k_sweep(
     ratio: float = 1.0,
     temperature_c5: float = 0.5,
     results_dir: Path = Path("results/paper_repro"),
+    think: bool = False,
 ) -> dict[int, dict]:
     """Finds the best single, uniform `retrieve_k` for a fixed backend/model,
     sweeping the same range as the paper's own run_k_sweep.sh.
@@ -658,6 +673,7 @@ def run_k_sweep(
             ratio=ratio,
             temperature_c5=temperature_c5,
             results_dir=results_dir,
+            think=think,
         )
         k_elapsed = time.monotonic() - k_start
         sweep_tracker.record(k_elapsed, cached=False)

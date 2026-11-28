@@ -828,6 +828,41 @@ def test_patch_ollama_chat_forces_think_false_by_default(monkeypatch):
     _ollama_call_stats.clear()
 
 
+def test_patch_ollama_chat_think_default_is_configurable_after_install(monkeypatch):
+    """docs/decisions/0021: the patch is installed once, but the `think`
+    default it injects follows the most recent _patch_ollama_chat(think=...)
+    call, so `paper_repro.thinking: true` works even if an earlier caller in
+    the same process installed the patch with the default."""
+    fake_ollama = types.ModuleType("ollama")
+    call_log = []
+
+    class _FakeResponse(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+    def fake_chat(*args, **kwargs):
+        call_log.append(kwargs)
+        return _FakeResponse({"message": {"content": "hi"}})
+
+    fake_ollama.chat = fake_chat
+    monkeypatch.setitem(sys.modules, "ollama", fake_ollama)
+
+    from amem_gepa.paper_repro import _ollama_call_stats, _patch_ollama_chat
+
+    _ollama_call_stats.clear()
+    _patch_ollama_chat()
+    _patch_ollama_chat(think=True)
+
+    import ollama
+    ollama.chat(model="qwen3.5:9b", messages=[])
+    assert call_log[0]["think"] is True
+
+    _patch_ollama_chat(think=False)
+    ollama.chat(model="qwen3.5:9b", messages=[])
+    assert call_log[1]["think"] is False
+    _ollama_call_stats.clear()
+
+
 def test_patch_ollama_chat_respects_an_explicit_think_value(monkeypatch):
     """setdefault, not an unconditional override -- a caller that
     explicitly asks for thinking (now or in some future code path) must

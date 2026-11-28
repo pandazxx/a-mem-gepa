@@ -165,6 +165,7 @@ class AMemGEPAAdapter:
         stats_path: Path | None = None,
         ensure_nltk: bool = True,
         frozen_components: Mapping[str, str] | None = None,
+        task_think: bool = False,
     ):
         if adversarial_scoring not in ("refusal", "paper"):
             raise ValueError(f"adversarial_scoring must be 'refusal' or 'paper', got {adversarial_scoring!r}")
@@ -175,6 +176,12 @@ class AMemGEPAAdapter:
         # enforcement layer -- a candidate that differs on a frozen component
         # scores 0 without a build, like a template that fails validation.
         self.frozen_components = dict(frozen_components) if frozen_components else {}
+        # Ollama thinking mode for the TASK model (memory building + QA),
+        # docs/decisions/0016 default False, configurable via
+        # `paper_repro.thinking` (docs/decisions/0021). Part of the build
+        # cache key: the same prompts build a different memory with thinking
+        # on, so the two must never share a cache entry.
+        self.task_think = bool(task_think)
         self.model = model
         self.retrieve_k = retrieve_k
         self.temperature_c5 = temperature_c5
@@ -221,7 +228,7 @@ class AMemGEPAAdapter:
             # it was measured not to need there. Without this, the GEPA arm
             # and the baseline it is compared against would run the same
             # model under different generation settings.
-            _patch_ollama_chat()
+            _patch_ollama_chat(think=self.task_think)
 
     # ------------------------------------------------------------------
     # evaluate
@@ -364,7 +371,8 @@ class AMemGEPAAdapter:
         # n_turns in the path keeps truncated smoke builds (docs/decisions/
         # 0015's smoke addendum) from colliding with full builds of the
         # same conversation under the same candidate.
-        base = self.cache_dir / cand_hash / f"{conv_id}_t{n_turns}"
+        cand_dir = f"{cand_hash}-think" if self.task_think else cand_hash
+        base = self.cache_dir / cand_dir / f"{conv_id}_t{n_turns}"
         return {
             "dir": base,
             "memories": base / "memories.pkl",
