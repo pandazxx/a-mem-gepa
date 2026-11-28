@@ -57,6 +57,9 @@ def main(
     backend = cfg["models"]["paper_repro_backend"]
     model = cfg["models"]["paper_repro_model"]
     k = retrieve_k if retrieve_k is not None else gepa_cfg.get("retrieve_k", 10)
+    # Proxy settings live in the single-component section (docs/decisions/0020).
+    stage_cfg = cfg.get("gepa_single_component", {})
+    competitors_k = stage_cfg.get("proxy_competitors_k", gepa_cfg.get("proxy_competitors_k", 10))
     resamples = cfg.get("evaluation", {}).get("bootstrap_resamples", 10_000)
 
     baseline = load_baseline_candidate(Path(gepa_cfg["seed_candidate_dir"]))
@@ -101,7 +104,11 @@ def main(
     typer.echo(f"  arms:            baseline ({gepa_cfg['seed_candidate_dir']})" + (f" vs candidate ({candidate})" if cand else " only"))
     typer.echo(f"  retrieve_k:      {k} (same for both arms)")
     if proxy_mode != "none":
-        typer.echo(f"  evaluation:      PROXY '{proxy_mode}' for the candidate arm (surrogate; baseline arm = cached full build)")
+        typer.echo(
+            f"  evaluation:      PROXY '{proxy_mode}' for the candidate arm"
+            + (f", top-{competitors_k} competitors per question" if proxy_mode == "competitors" else "")
+            + " (surrogate; baseline arm = cached full build)"
+        )
     typer.echo(f"  cost:            up to {arms * len(convs)} memory builds (fewer if cached) + {arms * len(instances)} questions")
     typer.echo(f"  bootstrap:       {resamples} paired resamples")
     typer.echo(f"  run dir:         {run_dir}{'  (RESUMING -- progress logs found)' if resuming else ''}")
@@ -139,7 +146,7 @@ def main(
                 "frozen_components": {c: t for c, t in baseline.items() if c != "note_construction"},
                 "seed_candidate": baseline,
                 "proxy_mode": proxy_mode,
-                "proxy_competitors_k": gepa_cfg.get("proxy_competitors_k", 10),
+                "proxy_competitors_k": competitors_k,
             }
             if proxy_mode != "none"
             else {}
